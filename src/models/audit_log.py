@@ -15,7 +15,7 @@ class EventAuditLog(Base):
     changed_column: Mapped[str] = mapped_column(String(50), nullable=False)
     old_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     new_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    change_date: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now())
+    change_date: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
     event: Mapped["Event"] = relationship("Event", back_populates="audit_logs")
     changed_by_user: Mapped[Optional["User"]] = relationship("User", back_populates="audit_logs")

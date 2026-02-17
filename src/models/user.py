@@ -12,7 +12,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False, default="user")
-    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
     bookmarks: Mapped[List["Bookmark"]] = relationship("Bookmark", back_populates="user")
     audit_logs: Mapped[List["EventAuditLog"]] = relationship("EventAuditLog", back_populates="changed_by_user")

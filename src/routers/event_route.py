@@ -178,10 +178,13 @@ async def create_event(
 
     db.add(event)
     try:
-        await db.flush() 
-
+        await db.flush()  
         if tag_ids:
-            for tid in (int(t.strip()) for t in tag_ids.split(",") if t.strip()):
+            try:
+                parsed_ids = [int(t.strip()) for t in tag_ids.split(",") if t.strip().isdigit()]
+            except ValueError:
+                parsed_ids = []
+            for tid in parsed_ids:
                 db.add(EventTag(event_id=event.id, tag_id=tid))
 
         await db.commit()

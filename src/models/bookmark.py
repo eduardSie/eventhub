@@ -9,7 +9,7 @@ class Bookmark(Base):
 
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     event_id: Mapped[int] = mapped_column(Integer, ForeignKey("events.id", ondelete="CASCADE"), primary_key=True)
-    added_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now())
+    added_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
     user: Mapped["User"] = relationship("User", back_populates="bookmarks")
     event: Mapped["Event"] = relationship("Event", back_populates="bookmarks")

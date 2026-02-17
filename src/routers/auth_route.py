@@ -1,77 +1,58 @@
-import os
-from datetime import datetime, timedelta
-from typing import Optional
-
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
-from passlib.context import CryptContext
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database import get_db
+from src.core.auth import hash_password, verify_password, create_access_token, get_current_user
 from src.models.user import User
+from src.schemas.user_schema import UserRegister, TokenOut, UserOut, UserProfileUpdate
 
-SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
-oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
+router = APIRouter(prefix="/api/v1/auth", tags=["Auth"])
 
 
-def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+@router.post("/register", response_model=UserOut, status_code=201)
+async def register(payload: UserRegister, db: AsyncSession = Depends(get_db)):
+    existing = (await db.execute(select(User).where(User.email == payload.email))).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
 
-
-def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
-
-
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
-    to_encode["exp"] = expire
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
-
-async def get_current_user(
-    token: str = Depends(oauth2_scheme),
-    db: AsyncSession = Depends(get_db),
-) -> User:
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: int = int(payload.get("sub"))
-    except (JWTError, TypeError, ValueError):
-        raise credentials_exception
-
-    user = await db.get(User, user_id)
-    if not user:
-        raise credentials_exception
+    user = User(email=payload.email, password_hash=hash_password(payload.password), role="user")
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
     return user
 
 
-async def get_current_user_optional(
-    token: Optional[str] = Depends(oauth2_scheme_optional),
+@router.post("/login", response_model=TokenOut)
+async def login(
+    form: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db),
-) -> Optional[User]:
-    if not token:
-        return None
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: int = int(payload.get("sub"))
-        return await db.get(User, user_id)
-    except Exception:
-        return None
+):
+    # Swagger UI sends 'username' field — we treat it as email
+    user = (await db.execute(select(User).where(User.email == form.username))).scalar_one_or_none()
+    if not user or not verify_password(form.password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
+    token = create_access_token({"sub": str(user.id), "role": user.role})
+    return TokenOut(access_token=token)
 
 
-async def require_admin(current_user: User = Depends(get_current_user)) -> User:
-    if current_user.role != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+@router.get("/me", response_model=UserOut)
+async def get_me(current_user: User = Depends(get_current_user)):
+    return current_user
+
+
+@router.patch("/me", response_model=UserOut)
+async def update_profile(
+    payload: UserProfileUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if payload.email:
+        current_user.email = payload.email
+    if payload.password:
+        current_user.password_hash = hash_password(payload.password)
+    await db.commit()
+    await db.refresh(current_user)
     return current_user

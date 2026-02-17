@@ -14,7 +14,7 @@ class Event(Base):
 
     title: Mapped[str] = mapped_column(String(100), nullable=False)
     organizer_id: Mapped[int] = mapped_column(Integer, ForeignKey("organizers.id", ondelete="CASCADE"), nullable=False)
-    date_start: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False)
+    date_start: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
 
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     image_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
@@ -22,15 +22,15 @@ class Event(Base):
 
     price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=Decimal("0.00"))
 
-    date_end: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP, nullable=True)
-    registration_deadline: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP, nullable=True)
+    date_end: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    registration_deadline: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
     city_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("cities.id", ondelete="SET NULL"), nullable=True)
     location_address: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     is_online: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
-    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now())
-    updated_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP, onupdate=func.now(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), onupdate=func.now(), nullable=True)
 
     organizer: Mapped["Organizer"] = relationship("Organizer", back_populates="events")
     city: Mapped[Optional["City"]] = relationship("City", back_populates="events")
