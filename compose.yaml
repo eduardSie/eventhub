@@ -12,7 +12,7 @@ services:
       - "5432"
 
   app:
-    image: ghcr.io/eduardSie/eventhub:latest
+    image: ghcr.io/eduardsie/eventhub:latest
     restart: always
     depends_on:
       db:
