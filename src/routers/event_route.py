@@ -77,16 +77,12 @@ def _resolve_tags(events):
 async def list_events(
     search: Optional[str] = Query(None, description="Filter by title/description"),
     city_id: Optional[int] = Query(None),
-    organizer_id: Optional[str] = Query(None),
+    organizer_id: Optional[int] = Query(None),
     is_online: Optional[bool] = Query(None),
-    tag_id: Optional[str] = Query(None),
+    tag_id: Optional[int] = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
     """Public: View Event List with optional Search & Filter."""
-    _city_id       = int(city_id)       if city_id       and city_id.strip()       else None
-    _organizer_id  = int(organizer_id)  if organizer_id  and organizer_id.strip()  else None
-    _tag_id        = int(tag_id)        if tag_id        and tag_id.strip()         else None
-    _is_online     = True if is_online == "true" else (False if is_online == "false" else None)
     query = select(Event).options(
         selectinload(Event.event_tags).selectinload(EventTag.tag)
     )
@@ -95,14 +91,14 @@ async def list_events(
         query = query.where(
             Event.title.ilike(f"%{search}%") | Event.description.ilike(f"%{search}%")
         )
-    if _city_id is not None:
-        query = query.where(Event.city_id == _city_id)
-    if _organizer_id is not None:
-        query = query.where(Event.organizer_id == _organizer_id)
-    if _is_online is not None:
-        query = query.where(Event.is_online == _is_online)
-    if _tag_id is not None:
-        query = query.join(EventTag, Event.id == EventTag.event_id).where(EventTag.tag_id == _tag_id)
+    if city_id is not None:
+        query = query.where(Event.city_id == city_id)
+    if organizer_id is not None:
+        query = query.where(Event.organizer_id == organizer_id)
+    if is_online is not None:
+        query = query.where(Event.is_online == is_online)
+    if tag_id is not None:
+        query = query.join(EventTag, Event.id == EventTag.event_id).where(EventTag.tag_id == tag_id)
 
     result = await db.execute(query)
     events = result.scalars().all()
