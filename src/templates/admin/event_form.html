@@ -89,7 +89,7 @@
         <div class="form-group">
           <label class="form-label">City</label>
           <select name="city_id" class="form-control filter-select">
-            <option value="">No city (online)</option>
+            <option value="">— No city —</option>
             {% for city in cities %}
             <option value="{{ city.id }}"
               {% if event and event.city_id == city.id %}selected{% endif %}>
@@ -126,9 +126,38 @@
         </div>
       </div>
 
+      <!-- ── Format: Online / In-person ── -->
       <div class="form-group">
+        <label class="form-label">Format *</label>
+        <div style="display:flex;gap:0;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;width:fit-content;">
+          <label id="label-inperson" style="display:flex;align-items:center;gap:8px;padding:10px 22px;cursor:pointer;font-size:13px;transition:background .2s,color .2s;">
+            <input type="radio" name="is_online" value="false" id="radio-inperson"
+              {% if not (event and event.is_online) %}checked{% endif %}
+              style="display:none;" onchange="toggleLocation(this)">
+            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/>
+              <circle cx="12" cy="10" r="3"/>
+            </svg>
+            In-person
+          </label>
+          <label id="label-online" style="display:flex;align-items:center;gap:8px;padding:10px 22px;cursor:pointer;font-size:13px;transition:background .2s,color .2s;border-left:1px solid var(--border);">
+            <input type="radio" name="is_online" value="true" id="radio-online"
+              {% if event and event.is_online %}checked{% endif %}
+              style="display:none;" onchange="toggleLocation(this)">
+            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="2" y1="12" x2="22" y2="12"/>
+              <path d="M12 2a15.3 15.3 0 010 20M12 2a15.3 15.3 0 000 20"/>
+            </svg>
+            Online
+          </label>
+        </div>
+      </div>
+
+      <!-- Address — shown only for In-person -->
+      <div class="form-group" id="location-group">
         <label class="form-label">Location Address</label>
-        <input type="text" name="location_address" class="form-control"
+        <input type="text" name="location_address" id="location_address" class="form-control"
           value="{{ event.location_address if event and event.location_address else '' }}"
           placeholder="123 Conference Ave, City">
       </div>
@@ -162,14 +191,6 @@
       </div>
 
       <div class="form-group">
-        <div class="form-check">
-          <input type="checkbox" name="is_online" id="is_online" value="true"
-            {% if event and event.is_online %}checked{% endif %}>
-          <label for="is_online" style="cursor:pointer;font-size:14px;">This is an online event</label>
-        </div>
-      </div>
-
-      <div class="form-group">
         <label class="form-label">Cover Image</label>
         {% if event and event.image_url %}
         <div style="margin-bottom:10px;border-radius:var(--radius);overflow:hidden;width:200px;">
@@ -192,4 +213,28 @@
     </form>
   </div>
 </div>
+
+<script>
+  const ACTIVE_STYLE   = 'background:var(--accent);color:#0d0d0e;';
+  const INACTIVE_STYLE = 'background:var(--bg3);color:var(--muted);';
+
+  function applyStyles() {
+    const isOnline = document.getElementById('radio-online').checked;
+    const lblOnline   = document.getElementById('label-online');
+    const lblInperson = document.getElementById('label-inperson');
+    const group       = document.getElementById('location-group');
+    const addrInput   = document.getElementById('location_address');
+
+    lblOnline.style.cssText   += isOnline ? ACTIVE_STYLE : INACTIVE_STYLE;
+    lblInperson.style.cssText += isOnline ? INACTIVE_STYLE : ACTIVE_STYLE;
+
+    group.style.display = isOnline ? 'none' : '';
+    if (isOnline) addrInput.value = '';   // clear address when switching to online
+  }
+
+  function toggleLocation() { applyStyles(); }
+
+  // Run on page load to set correct initial state
+  document.addEventListener('DOMContentLoaded', applyStyles);
+</script>
 {% endblock %}

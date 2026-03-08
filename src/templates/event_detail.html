@@ -68,6 +68,7 @@
             {% endif %}
           </div>
 
+          <!-- Date -->
           <div class="meta-item" style="margin-bottom:14px;">
             <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
               <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
@@ -82,6 +83,7 @@
             </div>
           </div>
 
+          <!-- Registration deadline -->
           {% if event.registration_deadline %}
           <div class="meta-item" style="margin-bottom:14px;">
             <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -94,7 +96,19 @@
           </div>
           {% endif %}
 
-          {% if event.location_address %}
+          <!-- Location: Online OR address, never both, never None -->
+          {% if event.is_online %}
+          <div class="meta-item" style="margin-bottom:14px;">
+            <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="2" y1="12" x2="22" y2="12"/>
+              <path d="M12 2a15.3 15.3 0 010 20M12 2a15.3 15.3 0 000 20"/>
+            </svg>
+            <div>
+              <div style="color:var(--success);font-size:13px;font-weight:500;">Online event</div>
+            </div>
+          </div>
+          {% elif event.location_address %}
           <div class="meta-item" style="margin-bottom:14px;">
             <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
               <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/>
@@ -102,11 +116,11 @@
             </svg>
             <div>
               <div style="color:var(--text);font-size:13px;">{{ event.location_address }}</div>
-              {% if event.is_online %}<div style="color:var(--success);font-size:11px;">Online</div>{% endif %}
             </div>
           </div>
           {% endif %}
 
+          <!-- Organizer -->
           {% if organizer %}
           <div class="meta-item" style="margin-bottom:0;">
             <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">

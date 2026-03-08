@@ -118,7 +118,18 @@
               </svg>
               {{ event.date_start.strftime('%d %b %Y, %H:%M') if event.date_start else '—' }}
             </div>
-            {% if event.location_address %}
+
+            {# Show location: either address or "Online", never None #}
+            {% if event.is_online %}
+            <div class="meta-item">
+              <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="2" y1="12" x2="22" y2="12"/>
+                <path d="M12 2a15.3 15.3 0 010 20M12 2a15.3 15.3 0 000 20"/>
+              </svg>
+              <span style="color:var(--success);">Online</span>
+            </div>
+            {% elif event.location_address %}
             <div class="meta-item">
               <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                 <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/>
@@ -155,7 +166,6 @@
 {% block scripts %}
 <script>
   document.querySelector('.filter-bar form').addEventListener('submit', function(e) {
-    // Remove inputs with empty values so they don't appear in URL at all
     this.querySelectorAll('input, select').forEach(el => {
       if (el.value === '') el.disabled = true;
     });
