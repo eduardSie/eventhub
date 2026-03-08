@@ -475,6 +475,16 @@ async def do_admin_event_create(
 ):
     _require_admin(user)
 
+    if is_online != "true" and not (location_address and location_address.strip()):
+        organizers = (await db.execute(select(Organizer).order_by(Organizer.name))).scalars().all()
+        cities     = (await db.execute(select(City).order_by(City.name))).scalars().all()
+        tags       = (await db.execute(select(Tag).order_by(Tag.name))).scalars().all()
+        return templates.TemplateResponse("admin/event_form.html", _ctx(
+            request, user, event=None,
+            error="Location address is required for in-person events.",
+            organizers=organizers, cities=cities, tags=tags,
+        ), status_code=400)
+
     event = Event(
         title=title, organizer_id=organizer_id,
         date_start=date_start, date_end=date_end,
@@ -571,6 +581,25 @@ async def do_admin_event_edit(
     user: Optional[User] = Depends(get_current_user_cookie),
 ):
     _require_admin(user)
+    if is_online != "true" and not (location_address and location_address.strip()):
+        result_ev = await db.execute(
+            select(Event)
+            .where(Event.id == event_id)
+            .options(selectinload(Event.event_tags).selectinload(EventTag.tag))
+        )
+        ev = result_ev.scalar_one_or_none()
+        if ev:
+            ev.tags = [et.tag for et in ev.event_tags]
+            ev.image_url = _presign(ev.image_url)
+        organizers = (await db.execute(select(Organizer).order_by(Organizer.name))).scalars().all()
+        cities     = (await db.execute(select(City).order_by(City.name))).scalars().all()
+        tags       = (await db.execute(select(Tag).order_by(Tag.name))).scalars().all()
+        return templates.TemplateResponse("admin/event_form.html", _ctx(
+            request, user, event=ev,
+            error="Location address is required for in-person events.",
+            organizers=organizers, cities=cities, tags=tags,
+        ), status_code=400)
+
     result = await db.execute(
         select(Event)
         .where(Event.id == event_id)

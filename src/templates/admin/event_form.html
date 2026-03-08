@@ -154,12 +154,16 @@
         </div>
       </div>
 
-      <!-- Address — shown only for In-person -->
+      <!-- Address — shown and required only for In-person -->
       <div class="form-group" id="location-group">
-        <label class="form-label">Location Address</label>
+        <label class="form-label">
+          Location Address
+          <span id="location-required-mark" style="color:var(--danger);margin-left:2px;">*</span>
+        </label>
         <input type="text" name="location_address" id="location_address" class="form-control"
           value="{{ event.location_address if event and event.location_address else '' }}"
-          placeholder="123 Conference Ave, City">
+          placeholder="123 Conference Ave, City"
+          required>
       </div>
 
       <div class="form-group">
@@ -219,22 +223,30 @@
   const INACTIVE_STYLE = 'background:var(--bg3);color:var(--muted);';
 
   function applyStyles() {
-    const isOnline = document.getElementById('radio-online').checked;
+    const isOnline  = document.getElementById('radio-online').checked;
     const lblOnline   = document.getElementById('label-online');
     const lblInperson = document.getElementById('label-inperson');
     const group       = document.getElementById('location-group');
     const addrInput   = document.getElementById('location_address');
+    const reqMark     = document.getElementById('location-required-mark');
 
-    lblOnline.style.cssText   += isOnline ? ACTIVE_STYLE : INACTIVE_STYLE;
+    lblOnline.style.cssText   += isOnline ? ACTIVE_STYLE   : INACTIVE_STYLE;
     lblInperson.style.cssText += isOnline ? INACTIVE_STYLE : ACTIVE_STYLE;
 
-    group.style.display = isOnline ? 'none' : '';
-    if (isOnline) addrInput.value = '';   // clear address when switching to online
+    if (isOnline) {
+      group.style.display  = 'none';
+      addrInput.value      = '';
+      addrInput.required   = false;
+      reqMark.style.display = 'none';
+    } else {
+      group.style.display  = '';
+      addrInput.required   = true;
+      reqMark.style.display = '';
+    }
   }
 
   function toggleLocation() { applyStyles(); }
 
-  // Run on page load to set correct initial state
   document.addEventListener('DOMContentLoaded', applyStyles);
 </script>
 {% endblock %}
