@@ -157,8 +157,7 @@
       <!-- Address — shown and required only for In-person -->
       <div class="form-group" id="location-group">
         <label class="form-label">
-          Location Address
-          <span id="location-required-mark" style="color:var(--danger);margin-left:2px;">*</span>
+          Location Address *
         </label>
         <input type="text" name="location_address" id="location_address" class="form-control"
           value="{{ event.location_address if event and event.location_address else '' }}"
