@@ -13,7 +13,14 @@
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Date</th><th>Event ID</th><th>Field</th><th>Old Value</th><th>New Value</th><th>Changed By</th></tr>
+          <tr>
+            <th>Date</th>
+            <th>Event</th>
+            <th>Field</th>
+            <th>Old Value</th>
+            <th>New Value</th>
+            <th>Changed By</th>
+          </tr>
         </thead>
         <tbody>
           {% if logs %}
@@ -22,15 +29,49 @@
             <td style="font-family:var(--font-mono);font-size:11px;color:var(--muted);white-space:nowrap;">
               {{ log.change_date.strftime('%d %b %Y %H:%M') if log.change_date else '—' }}
             </td>
-            <td><a href="/event/{{ log.event_id }}" style="font-family:var(--font-mono);font-size:12px;color:var(--accent);">#{{ log.event_id }}</a></td>
-            <td><span style="font-family:var(--font-mono);font-size:11px;background:var(--bg3);padding:2px 6px;border-radius:2px;">{{ log.changed_column }}</span></td>
-            <td style="font-size:12px;color:var(--muted);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ log.old_value or '—' }}</td>
-            <td style="font-size:12px;color:var(--text);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ log.new_value or '—' }}</td>
-            <td style="font-family:var(--font-mono);font-size:11px;color:var(--muted);">{% if log.changed_by %}#{{ log.changed_by }}{% else %}—{% endif %}</td>
+            <td>
+              <a href="/event/{{ log.event_id }}"
+                 style="font-family:var(--font-mono);font-size:12px;color:var(--accent);">
+                #{{ log.event_id }}
+              </a>
+            </td>
+            <td>
+              <span style="font-family:var(--font-mono);font-size:11px;background:var(--bg3);
+                           border:1px solid var(--border);padding:2px 6px;border-radius:2px;white-space:nowrap;">
+                {{ log.changed_column }}
+              </span>
+            </td>
+            <td style="font-size:12px;color:var(--muted);max-width:200px;
+                       overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                title="{{ log.old_value }}">
+              {{ log.old_value or '—' }}
+            </td>
+            <td style="font-size:12px;color:var(--text);max-width:200px;
+                       overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                title="{{ log.new_value }}">
+              {{ log.new_value or '—' }}
+            </td>
+            <td style="font-size:12px;">
+              {% if log.changed_by and log.changed_by in users_by_id %}
+                <span style="font-family:var(--font-mono);font-size:11px;color:var(--muted);">
+                  {{ users_by_id[log.changed_by] }}
+                </span>
+              {% elif log.changed_by %}
+                <span style="font-family:var(--font-mono);font-size:11px;color:var(--muted);">
+                  #{{ log.changed_by }}
+                </span>
+              {% else %}
+                <span style="color:var(--muted);">—</span>
+              {% endif %}
+            </td>
           </tr>
           {% endfor %}
           {% else %}
-          <tr><td colspan="6" style="text-align:center;padding:40px;color:var(--muted);">No audit entries yet.</td></tr>
+          <tr>
+            <td colspan="6" style="text-align:center;padding:40px;color:var(--muted);">
+              No audit entries yet.
+            </td>
+          </tr>
           {% endif %}
         </tbody>
       </table>

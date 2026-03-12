@@ -603,12 +603,23 @@ async def do_admin_event_edit(
         "website_url": website_url, "description": description,
         "is_online": online,
     }
+    def _fmt(v):
+        """Normalize value for audit log comparison and storage.
+        Strips timezone from datetimes so naive (from form) and
+        aware (from DB) timestamps compare correctly."""
+        if isinstance(v, datetime):
+            return v.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+        if v is None:
+            return ""
+        return str(v)
+
     for field, new_val in updates.items():
         old_val = getattr(event, field, None)
-        if str(old_val) != str(new_val):
+        old_str, new_str = _fmt(old_val), _fmt(new_val)
+        if old_str != new_str:
             db.add(EventAuditLog(
                 event_id=event_id, changed_by=user.id,
-                changed_column=field, old_value=str(old_val), new_value=str(new_val),
+                changed_column=field, old_value=old_str, new_value=new_str,
             ))
         setattr(event, field, new_val)
 
@@ -853,8 +864,18 @@ async def page_admin_audit(
     logs = (await db.execute(
         select(EventAuditLog).order_by(EventAuditLog.change_date.desc()).limit(200)
     )).scalars().all()
+
+    # Resolve user IDs → emails for display
+    user_ids = {log.changed_by for log in logs if log.changed_by is not None}
+    users_by_id: dict[int, str] = {}
+    if user_ids:
+        rows = (await db.execute(
+            select(User.id, User.email).where(User.id.in_(user_ids))
+        )).all()
+        users_by_id = {row.id: row.email for row in rows}
+
     return templates.TemplateResponse("admin/audit.html", _ctx(
-        request, user, logs=logs, active="audit"
+        request, user, logs=logs, users_by_id=users_by_id, active="audit"
     ))
 
 
