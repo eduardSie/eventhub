@@ -4,18 +4,16 @@ Auth is stored in an HttpOnly cookie (JWT token).
 """
 from __future__ import annotations
 
+import io
 import logging
 import os
 import uuid
-import io
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Optional, List
+from typing import List, Optional
 
-import boto3
-from botocore.client import Config
 from fastapi import (
-    APIRouter, Depends, Form, File, HTTPException,
+    APIRouter, Depends, File, Form, HTTPException,
     Query, Request, Response, UploadFile,
 )
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -25,19 +23,29 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from src.core.auth import hash_password, verify_password, create_access_token
+from src.core.auth import create_access_token, hash_password, verify_password
 from src.core.database import get_db
+from src.helpers import s3
 from src.models.audit_log import EventAuditLog
 from src.models.bookmark import Bookmark
 from src.models.city import City
+from src.models.country import Country
 from src.models.event import Event
 from src.models.organizer import Organizer
 from src.models.tag import EventTag, Tag
 from src.models.user import User
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter(include_in_schema=False)
+
+# ── Templates ──────────────────────────────────────────────────────
+BASE_DIR  = os.path.dirname(os.path.dirname(__file__))  # src/
+templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
+
+# ── JWT settings ───────────────────────────────────────────────────
+SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production")
+ALGORITHM  = "HS256"
+COOKIE_KEY = "access_token"
 
 
 # ── Validation helpers ─────────────────────────────────────────────
@@ -62,57 +70,8 @@ def _require_url(value: Optional[str], label: str) -> str:
     return v
 
 
-# ── Templates ──────────────────────────────────────────────────────
-BASE_DIR = os.path.dirname(os.path.dirname(__file__))  # src/
-templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
-
-# ── JWT settings (mirrors auth.py) ────────────────────────────────
-SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production")
-ALGORITHM  = "HS256"
-COOKIE_KEY = "access_token"
-
-# ── S3 helpers (mirrors event_route.py) ───────────────────────────
-S3_ENDPOINT   = os.getenv("S3_ENDPOINT")
-S3_BUCKET     = os.getenv("S3_BUCKET")
-S3_ACCESS_KEY = os.getenv("S3_ACCESS_KEY")
-S3_SECRET_KEY = os.getenv("S3_SECRET_KEY")
-S3_REGION     = os.getenv("S3_REGION", "eu-central-1")
-S3_PUBLIC_BASE= os.getenv("S3_PUBLIC_BASE", "")
-ALLOWED_IMG   = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
-
-
-def _s3():
-    kwargs = dict(
-        aws_access_key_id=S3_ACCESS_KEY,
-        aws_secret_access_key=S3_SECRET_KEY,
-        config=Config(signature_version="s3v4"),
-        region_name=S3_REGION,
-    )
-    if S3_ENDPOINT:
-        kwargs["endpoint_url"] = S3_ENDPOINT
-    return boto3.client("s3", **kwargs)
-
-def _presign(key: str) -> Optional[str]:
-    if not key:
-        return None
-    if key.startswith("http"):
-        return key
-    if S3_PUBLIC_BASE:
-        return f"{S3_PUBLIC_BASE.rstrip('/')}/{key.lstrip('/')}"
-    try:
-        return _s3().generate_presigned_url(
-            "get_object",
-            Params={"Bucket": S3_BUCKET, "Key": key.lstrip("/")},
-            ExpiresIn=3600,
-        )
-    except Exception as e:
-        logger.error("S3 presign error: %s", e)
-        return None
-
-
 # ── Auth helpers ───────────────────────────────────────────────────
-def _get_user_from_cookie(request: Request, db: AsyncSession) -> None:
-    """Returns (user_id, role) from JWT cookie, or None."""
+def _get_user_from_cookie(request: Request, db: AsyncSession):
     token = request.cookies.get(COOKIE_KEY)
     if not token:
         return None
@@ -152,17 +111,15 @@ def _require_admin(user: Optional[User]) -> None:
 
 
 def _resolve_tags_and_images(events):
-    """Hydrate .tags and .image_url on event instances."""
     if not isinstance(events, list):
         events = [events]
     for ev in events:
         ev.tags = [et.tag for et in ev.event_tags]
-        ev.image_url = _presign(ev.image_url)
+        ev.image_url = s3.presign(ev.image_url)
     return events
 
 
 def _ctx(request: Request, user: Optional[User], **kwargs) -> dict:
-    """Build base template context."""
     messages = getattr(request.state, "messages", [])
     return {"request": request, "user": user, "messages": messages, **kwargs}
 
@@ -182,7 +139,7 @@ async def page_index(
     user: Optional[User] = Depends(get_current_user_cookie),
 ):
     _organizer_id = int(organizer_id) if organizer_id and organizer_id.strip() else None
-    _tag_id = int(tag_id) if tag_id and tag_id.strip() else None
+    _tag_id       = int(tag_id)       if tag_id       and tag_id.strip()       else None
     query = select(Event).options(
         selectinload(Event.event_tags).selectinload(EventTag.tag)
     )
@@ -199,27 +156,21 @@ async def page_index(
     if _tag_id:
         query = query.join(EventTag, Event.id == EventTag.event_id).where(EventTag.tag_id == _tag_id)
 
-    query = query.order_by(Event.date_start.asc())
+    query  = query.order_by(Event.date_start.asc())
     events = (await db.execute(query)).scalars().all()
     _resolve_tags_and_images(list(events))
 
-    organizers = (await db.execute(select(Organizer).order_by(Organizer.name))).scalars().all()
-    tags       = (await db.execute(select(Tag).order_by(Tag.name))).scalars().all()
-
+    organizers       = (await db.execute(select(Organizer).order_by(Organizer.name))).scalars().all()
+    tags             = (await db.execute(select(Tag).order_by(Tag.name))).scalars().all()
     total_events     = (await db.execute(select(func.count()).select_from(Event))).scalar()
     total_organizers = (await db.execute(select(func.count()).select_from(Organizer))).scalar()
 
     return templates.TemplateResponse("index.html", _ctx(
         request, user,
-        events=events,
-        organizers=organizers,
-        tags=tags,
-        search=search,
-        is_online=is_online,
-        organizer_id=_organizer_id,
-        tag_id=_tag_id,
-        total_events=total_events,
-        total_organizers=total_organizers,
+        events=events, organizers=organizers, tags=tags,
+        search=search, is_online=is_online,
+        organizer_id=_organizer_id, tag_id=_tag_id,
+        total_events=total_events, total_organizers=total_organizers,
     ))
 
 
@@ -253,9 +204,7 @@ async def page_event_detail(
 
     return templates.TemplateResponse("event_detail.html", _ctx(
         request, user,
-        event=event,
-        organizer=organizer,
-        is_bookmarked=is_bookmarked,
+        event=event, organizer=organizer, is_bookmarked=is_bookmarked,
     ))
 
 
@@ -264,10 +213,7 @@ async def page_event_detail(
 # ═══════════════════════════════════════════════════════════════════
 
 @router.get("/login", response_class=HTMLResponse)
-async def page_login(
-    request: Request,
-    user: Optional[User] = Depends(get_current_user_cookie),
-):
+async def page_login(request: Request, user: Optional[User] = Depends(get_current_user_cookie)):
     if user:
         return RedirectResponse("/", status_code=302)
     return templates.TemplateResponse("login.html", _ctx(request, user))
@@ -292,17 +238,14 @@ async def do_login(
             request, None, error="Invalid email or password.", email=email
         ), status_code=400)
 
-    token = create_access_token({"sub": str(user.id), "role": user.role})
+    token    = create_access_token({"sub": str(user.id), "role": user.role})
     response = RedirectResponse("/", status_code=302)
     _set_auth_cookie(response, token)
     return response
 
 
 @router.get("/register", response_class=HTMLResponse)
-async def page_register(
-    request: Request,
-    user: Optional[User] = Depends(get_current_user_cookie),
-):
+async def page_register(request: Request, user: Optional[User] = Depends(get_current_user_cookie)):
     if user:
         return RedirectResponse("/", status_code=302)
     return templates.TemplateResponse("register.html", _ctx(request, user))
@@ -335,7 +278,7 @@ async def do_register(
     db.add(new_user)
     await db.commit()
 
-    token = create_access_token({"sub": str(new_user.id), "role": new_user.role})
+    token    = create_access_token({"sub": str(new_user.id), "role": new_user.role})
     response = RedirectResponse("/", status_code=302)
     _set_auth_cookie(response, token)
     return response
@@ -375,9 +318,7 @@ async def page_bookmarks(
     for bm in bookmarks:
         _resolve_tags_and_images(bm.event)
 
-    return templates.TemplateResponse("bookmarks.html", _ctx(
-        request, user, bookmarks=bookmarks
-    ))
+    return templates.TemplateResponse("bookmarks.html", _ctx(request, user, bookmarks=bookmarks))
 
 
 @router.post("/bookmarks/{event_id}")
@@ -438,6 +379,7 @@ async def page_admin_dashboard(
         "events":     (await db.execute(select(func.count()).select_from(Event))).scalar(),
         "organizers": (await db.execute(select(func.count()).select_from(Organizer))).scalar(),
         "tags":       (await db.execute(select(func.count()).select_from(Tag))).scalar(),
+        "cities":     (await db.execute(select(func.count()).select_from(City))).scalar(),
         "users":      (await db.execute(select(func.count()).select_from(User))).scalar(),
     }
     return templates.TemplateResponse("admin/dashboard.html", _ctx(
@@ -481,12 +423,11 @@ async def page_admin_event_new(
     tags       = (await db.execute(select(Tag).order_by(Tag.name))).scalars().all()
     return templates.TemplateResponse("admin/event_form.html", _ctx(
         request, user, event=None,
-        organizers=organizers, cities=cities, tags=tags
+        organizers=organizers, cities=cities, tags=tags,
     ))
 
 
 async def _event_form_error(request, user, db, event, error, status_code=400):
-    """Helper: re-render the event form with an error message."""
     organizers = (await db.execute(select(Organizer).order_by(Organizer.name))).scalars().all()
     cities     = (await db.execute(select(City).order_by(City.name))).scalars().all()
     tags       = (await db.execute(select(Tag).order_by(Tag.name))).scalars().all()
@@ -516,8 +457,6 @@ async def do_admin_event_create(
     user: Optional[User] = Depends(get_current_user_cookie),
 ):
     _require_admin(user)
-
-    # ── server-side validation ─────────────────────────────────────
     try:
         title       = _require(title, "Title")
         description = _require(description, "Description")
@@ -544,20 +483,15 @@ async def do_admin_event_create(
         is_online=online,
     )
 
-    s3_key = None
     if image and image.filename:
-        if image.content_type not in ALLOWED_IMG:
+        if image.content_type not in s3.ALLOWED_IMG:
             return await _event_form_error(request, user, db, None, "Unsupported image type.")
-
         contents = await image.read()
         if contents:
-            ext = ALLOWED_IMG[image.content_type]
+            ext    = s3.ALLOWED_IMG[image.content_type]
             s3_key = f"uploads/{uuid.uuid4()}.{ext}"
             try:
-                _s3().upload_fileobj(
-                    io.BytesIO(contents), S3_BUCKET, s3_key,
-                    ExtraArgs={"ContentType": image.content_type},
-                )
+                s3.upload_fileobj(io.BytesIO(contents), s3_key, image.content_type)
                 event.image_url = s3_key
             except Exception as e:
                 logger.error("S3 upload failed: %s", e)
@@ -567,7 +501,6 @@ async def do_admin_event_create(
     for tid in tag_ids:
         db.add(EventTag(event_id=event.id, tag_id=tid))
     await db.commit()
-
     return RedirectResponse("/admin/events", status_code=302)
 
 
@@ -588,16 +521,15 @@ async def page_admin_event_edit(
     if not event:
         raise HTTPException(status_code=404)
 
-    event.tags = [et.tag for et in event.event_tags]
-    event.image_url = _presign(event.image_url)
+    event.tags      = [et.tag for et in event.event_tags]
+    event.image_url = s3.presign(event.image_url)
 
     organizers = (await db.execute(select(Organizer).order_by(Organizer.name))).scalars().all()
     cities     = (await db.execute(select(City).order_by(City.name))).scalars().all()
     tags       = (await db.execute(select(Tag).order_by(Tag.name))).scalars().all()
-
     return templates.TemplateResponse("admin/event_form.html", _ctx(
         request, user, event=event,
-        organizers=organizers, cities=cities, tags=tags
+        organizers=organizers, cities=cities, tags=tags,
     ))
 
 
@@ -623,32 +555,30 @@ async def do_admin_event_edit(
 ):
     _require_admin(user)
 
-    # ── re-fetch event for error re-render context ─────────────────
-    async def _fetch_event():
+    async def _fetch_event_for_form():
         res = await db.execute(
             select(Event).where(Event.id == event_id)
             .options(selectinload(Event.event_tags).selectinload(EventTag.tag))
         )
         ev = res.scalar_one_or_none()
         if ev:
-            ev.tags = [et.tag for et in ev.event_tags]
-            ev.image_url = _presign(ev.image_url)
+            ev.tags      = [et.tag for et in ev.event_tags]
+            ev.image_url = s3.presign(ev.image_url)
         return ev
 
-    # ── server-side validation ─────────────────────────────────────
     try:
         title       = _require(title, "Title")
         description = _require(description, "Description")
         website_url = _require_url(website_url, "Website URL")
     except ValueError as exc:
-        ev = await _fetch_event()
+        ev = await _fetch_event_for_form()
         return await _event_form_error(request, user, db, ev, str(exc))
 
     online = (is_online == "true")
     if not online:
         location_address = _strip(location_address)
         if not location_address:
-            ev = await _fetch_event()
+            ev = await _fetch_event_for_form()
             return await _event_form_error(
                 request, user, db, ev,
                 "«Location address» is required for in-person events."
@@ -681,20 +611,16 @@ async def do_admin_event_edit(
             ))
         setattr(event, field, new_val)
 
-    if image and image.filename:
-        if image.content_type in ALLOWED_IMG:
-            contents = await image.read()
-            if contents:
-                ext = ALLOWED_IMG[image.content_type]
-                s3_key = f"uploads/{uuid.uuid4()}.{ext}"
-                try:
-                    _s3().upload_fileobj(
-                        io.BytesIO(contents), S3_BUCKET, s3_key,
-                        ExtraArgs={"ContentType": image.content_type},
-                    )
-                    event.image_url = s3_key
-                except Exception as e:
-                    logger.error("S3 upload failed: %s", e)
+    if image and image.filename and image.content_type in s3.ALLOWED_IMG:
+        contents = await image.read()
+        if contents:
+            ext    = s3.ALLOWED_IMG[image.content_type]
+            s3_key = f"uploads/{uuid.uuid4()}.{ext}"
+            try:
+                s3.upload_fileobj(io.BytesIO(contents), s3_key, image.content_type)
+                event.image_url = s3_key
+            except Exception as e:
+                logger.error("S3 upload failed: %s", e)
 
     await db.execute(EventTag.__table__.delete().where(EventTag.event_id == event_id))
     for tid in tag_ids:
@@ -702,7 +628,6 @@ async def do_admin_event_edit(
 
     event.updated_at = datetime.now(timezone.utc)
     await db.commit()
-
     return RedirectResponse("/admin/events", status_code=302)
 
 
@@ -715,11 +640,7 @@ async def do_admin_event_delete(
     _require_admin(user)
     event = await db.get(Event, event_id)
     if event:
-        if event.image_url:
-            try:
-                _s3().delete_object(Bucket=S3_BUCKET, Key=event.image_url)
-            except Exception:
-                pass
+        s3.delete_object(event.image_url)
         await db.delete(event)
         await db.commit()
     return RedirectResponse("/admin/events", status_code=302)
@@ -750,7 +671,6 @@ async def do_admin_tag_create(
     user: Optional[User] = Depends(get_current_user_cookie),
 ):
     _require_admin(user)
-
     name = _strip(name)
     if not name:
         tags = (await db.execute(select(Tag).order_by(Tag.name))).scalars().all()
@@ -764,6 +684,7 @@ async def do_admin_tag_create(
         return templates.TemplateResponse("admin/tags.html", _ctx(
             request, user, tags=tags, error=f"Tag '{name}' already exists."
         ), status_code=400)
+
     db.add(Tag(name=name))
     await db.commit()
     return RedirectResponse("/admin/tags", status_code=302)
@@ -781,6 +702,79 @@ async def do_admin_tag_delete(
         await db.delete(tag)
         await db.commit()
     return RedirectResponse("/admin/tags", status_code=302)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ADMIN — Cities
+# ═══════════════════════════════════════════════════════════════════
+
+@router.get("/admin/cities", response_class=HTMLResponse)
+async def page_admin_cities(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: Optional[User] = Depends(get_current_user_cookie),
+):
+    _require_admin(user)
+    cities    = (await db.execute(
+        select(City).options(selectinload(City.country)).order_by(City.name)
+    )).scalars().all()
+    countries = (await db.execute(select(Country).order_by(Country.name))).scalars().all()
+    return templates.TemplateResponse("admin/cities.html", _ctx(
+        request, user, cities=cities, countries=countries, active="cities"
+    ))
+
+
+@router.post("/admin/cities")
+async def do_admin_city_create(
+    request: Request,
+    name: str = Form(...),
+    country_id: int = Form(...),
+    db: AsyncSession = Depends(get_db),
+    user: Optional[User] = Depends(get_current_user_cookie),
+):
+    _require_admin(user)
+
+    async def _city_error(msg: str):
+        cities    = (await db.execute(
+            select(City).options(selectinload(City.country)).order_by(City.name)
+        )).scalars().all()
+        countries = (await db.execute(select(Country).order_by(Country.name))).scalars().all()
+        return templates.TemplateResponse("admin/cities.html", _ctx(
+            request, user, cities=cities, countries=countries,
+            active="cities", error=msg,
+        ), status_code=400)
+
+    name = _strip(name)
+    if not name:
+        return await _city_error("City name cannot be blank.")
+
+    country = await db.get(Country, country_id)
+    if not country:
+        return await _city_error("Please select a valid country.")
+
+    existing = (await db.execute(
+        select(City).where(City.name == name, City.country_id == country_id)
+    )).scalar_one_or_none()
+    if existing:
+        return await _city_error(f"City '{name}' already exists in {country.name}.")
+
+    db.add(City(name=name, country_id=country_id))
+    await db.commit()
+    return RedirectResponse("/admin/cities", status_code=302)
+
+
+@router.post("/admin/cities/{city_id}/delete")
+async def do_admin_city_delete(
+    city_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: Optional[User] = Depends(get_current_user_cookie),
+):
+    _require_admin(user)
+    city = await db.get(City, city_id)
+    if city:
+        await db.delete(city)
+        await db.commit()
+    return RedirectResponse("/admin/cities", status_code=302)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -819,14 +813,13 @@ async def do_admin_organizer_create(
         ), status_code=400)
 
     try:
-        name        = _require(name, "Name")
-        website     = _require_url(website, "Website")
+        name          = _require(name, "Name")
+        website       = _require_url(website, "Website")
         contact_email = _require(contact_email, "Contact email")
-        description = _require(description, "Description")
+        description   = _require(description, "Description")
     except ValueError as exc:
         return await _org_error(str(exc))
 
-    # basic email sanity
     if "@" not in contact_email:
         return await _org_error("«Contact email» must be a valid email address.")
 
@@ -834,12 +827,7 @@ async def do_admin_organizer_create(
     if existing:
         return await _org_error(f"Organizer '{name}' already exists.")
 
-    db.add(Organizer(
-        name=name,
-        website=website,
-        contact_email=contact_email,
-        description=description,
-    ))
+    db.add(Organizer(name=name, website=website, contact_email=contact_email, description=description))
     await db.commit()
     return RedirectResponse("/admin/organizers", status_code=302)
 

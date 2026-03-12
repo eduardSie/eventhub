@@ -1,8 +1,6 @@
 import uuid
 import logging
-import os
-import boto3
-from botocore.client import Config
+import io
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional, List
@@ -14,6 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from src.core.database import get_db
 from src.core.auth import get_current_user, require_admin
+from src.helpers import s3
 from src.models.event import Event
 from src.models.tag import EventTag
 from src.models.audit_log import EventAuditLog
@@ -22,52 +21,13 @@ from src.schemas.event_schema import EventOut, EventUpdate
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["Events"])
-ALLOWED = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
-
-S3_ENDPOINT = os.getenv("S3_ENDPOINT")
-S3_BUCKET = os.getenv("S3_BUCKET")
-S3_ACCESS_KEY = os.getenv("S3_ACCESS_KEY")
-S3_SECRET_KEY = os.getenv("S3_SECRET_KEY")
-S3_REGION = os.getenv("S3_REGION", "eu-central-1")
-S3_PUBLIC_BASE = os.getenv("S3_PUBLIC_BASE", "")
-
-
-def get_s3_client():
-    kwargs = dict(
-        aws_access_key_id=S3_ACCESS_KEY,
-        aws_secret_access_key=S3_SECRET_KEY,
-        config=Config(signature_version="s3v4"),
-        region_name=S3_REGION,
-    )
-    if S3_ENDPOINT:
-        kwargs["endpoint_url"] = S3_ENDPOINT
-    return boto3.client("s3", **kwargs)
-
-
-def make_presigned_url(key: str, expires_in: int = 3600) -> str:
-    if not key:
-        return None
-    if key.startswith("http"):
-        return key
-    if S3_PUBLIC_BASE:
-        return f"{S3_PUBLIC_BASE.rstrip('/')}/{key.lstrip('/')}"
-    try:
-        s3 = get_s3_client()
-        return s3.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": S3_BUCKET, "Key": key.lstrip("/")},
-            ExpiresIn=expires_in,
-        )
-    except Exception as e:
-        logger.error(f"S3 presign error: {e}")
-        return key
 
 
 def _resolve_tags(events):
-    """Populate tags field from event_tags relationship."""
+    """Populate .tags and presign .image_url on event instance(s)."""
     for ev in events if isinstance(events, list) else [events]:
         ev.tags = [et.tag for et in ev.event_tags]
-        ev.image_url = make_presigned_url(ev.image_url)
+        ev.image_url = s3.presign(ev.image_url)
     return events
 
 
@@ -86,7 +46,6 @@ async def list_events(
     query = select(Event).options(
         selectinload(Event.event_tags).selectinload(EventTag.tag)
     )
-
     if search:
         query = query.where(
             Event.title.ilike(f"%{search}%") | Event.description.ilike(f"%{search}%")
@@ -158,19 +117,13 @@ async def create_event(
 
     s3_uploaded_key = None
     if image:
-        if image.content_type not in ALLOWED:
+        if image.content_type not in s3.ALLOWED_IMG:
             raise HTTPException(status_code=415, detail="Unsupported file type")
-        ext = ALLOWED[image.content_type]
-        filename = f"{uuid.uuid4()}.{ext}"
-        key = f"uploads/{filename}"
+        ext = s3.ALLOWED_IMG[image.content_type]
+        key = f"uploads/{uuid.uuid4()}.{ext}"
         try:
-            s3 = get_s3_client()
-            s3.upload_fileobj(
-                Fileobj=image.file,
-                Bucket=S3_BUCKET,
-                Key=key,
-                ExtraArgs={"ContentType": image.content_type, "ACL": "public-read"},
-            )
+            contents = await image.read()
+            s3.upload_fileobj(io.BytesIO(contents), key, image.content_type)
             s3_uploaded_key = key
             event.image_url = key
         except Exception as e:
@@ -179,24 +132,16 @@ async def create_event(
 
     db.add(event)
     try:
-        await db.flush() 
-
+        await db.flush()
         if tag_ids:
-            try:
-                parsed_ids = [int(t.strip()) for t in tag_ids.split(",") if t.strip().isdigit()]
-            except ValueError:
-                parsed_ids = []
+            parsed_ids = [int(t.strip()) for t in tag_ids.split(",") if t.strip().isdigit()]
             for tid in parsed_ids:
                 db.add(EventTag(event_id=event.id, tag_id=tid))
-
         await db.commit()
     except Exception as e:
         logger.error("DB Error", exc_info=e)
         if s3_uploaded_key:
-            try:
-                get_s3_client().delete_object(Bucket=S3_BUCKET, Key=s3_uploaded_key)
-            except Exception:
-                pass
+            s3.delete_object(s3_uploaded_key)
         if "foreign key" in str(e).lower():
             raise HTTPException(status_code=400, detail="Invalid organizer_id, city_id, or tag_id.")
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
@@ -229,7 +174,6 @@ async def update_event(
         raise HTTPException(status_code=404, detail="Event not found")
 
     update_data = payload.model_dump(exclude_unset=True, exclude={"tag_ids"})
-
     for field, new_val in update_data.items():
         old_val = getattr(event, field, None)
         if str(old_val) != str(new_val):
@@ -272,13 +216,7 @@ async def delete_event(
     event = await db.get(Event, event_id)
     if not event:
         raise HTTPException(status_code=404, detail="Not found")
-
-    if event.image_url:
-        try:
-            get_s3_client().delete_object(Bucket=S3_BUCKET, Key=event.image_url)
-        except Exception:
-            pass
-
+    s3.delete_object(event.image_url)
     await db.delete(event)
     await db.commit()
     return None
