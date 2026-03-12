@@ -39,6 +39,29 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(include_in_schema=False)
 
+
+# ── Validation helpers ─────────────────────────────────────────────
+def _strip(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    v = value.strip()
+    return v if v else None
+
+
+def _require(value: Optional[str], label: str) -> str:
+    v = _strip(value)
+    if not v:
+        raise ValueError(f"«{label}» is required and cannot be blank.")
+    return v
+
+
+def _require_url(value: Optional[str], label: str) -> str:
+    v = _require(value, label)
+    if not (v.startswith("http://") or v.startswith("https://")):
+        raise ValueError(f"«{label}» must be a valid URL starting with https://")
+    return v
+
+
 # ── Templates ──────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))  # src/
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
@@ -65,7 +88,7 @@ def _s3():
         config=Config(signature_version="s3v4"),
         region_name=S3_REGION,
     )
-    if S3_ENDPOINT:  
+    if S3_ENDPOINT:
         kwargs["endpoint_url"] = S3_ENDPOINT
     return boto3.client("s3", **kwargs)
 
@@ -85,7 +108,6 @@ def _presign(key: str) -> Optional[str]:
     except Exception as e:
         logger.error("S3 presign error: %s", e)
         return None
-
 
 
 # ── Auth helpers ───────────────────────────────────────────────────
@@ -116,7 +138,7 @@ def _set_auth_cookie(response: Response, token: str) -> None:
     response.set_cookie(
         COOKIE_KEY, token,
         httponly=True, samesite="lax",
-        max_age=60 * 60 * 24,  
+        max_age=60 * 60 * 24,
     )
 
 
@@ -137,13 +159,6 @@ def _resolve_tags_and_images(events):
         ev.tags = [et.tag for et in ev.event_tags]
         ev.image_url = _presign(ev.image_url)
     return events
-
-
-def _flash(request: Request, category: str, message: str):
-    """Store flash message in session (via request.state)."""
-    if not hasattr(request.state, "messages"):
-        request.state.messages = []
-    request.state.messages.append((category, message))
 
 
 def _ctx(request: Request, user: Optional[User], **kwargs) -> dict:
@@ -265,6 +280,12 @@ async def do_login(
     password: str = Form(...),
     db: AsyncSession = Depends(get_db),
 ):
+    email = email.strip()
+    if not email:
+        return templates.TemplateResponse("login.html", _ctx(
+            request, None, error="Email is required."
+        ), status_code=400)
+
     user = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
     if not user or not verify_password(password, user.password_hash):
         return templates.TemplateResponse("login.html", _ctx(
@@ -294,6 +315,16 @@ async def do_register(
     password: str = Form(...),
     db: AsyncSession = Depends(get_db),
 ):
+    email = email.strip()
+    if not email:
+        return templates.TemplateResponse("register.html", _ctx(
+            request, None, error="Email is required."
+        ), status_code=400)
+    if not password or len(password) < 8:
+        return templates.TemplateResponse("register.html", _ctx(
+            request, None, error="Password must be at least 8 characters.", email=email
+        ), status_code=400)
+
     existing = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
     if existing:
         return templates.TemplateResponse("register.html", _ctx(
@@ -454,6 +485,17 @@ async def page_admin_event_new(
     ))
 
 
+async def _event_form_error(request, user, db, event, error, status_code=400):
+    """Helper: re-render the event form with an error message."""
+    organizers = (await db.execute(select(Organizer).order_by(Organizer.name))).scalars().all()
+    cities     = (await db.execute(select(City).order_by(City.name))).scalars().all()
+    tags       = (await db.execute(select(Tag).order_by(Tag.name))).scalars().all()
+    return templates.TemplateResponse("admin/event_form.html", _ctx(
+        request, user, event=event, error=error,
+        organizers=organizers, cities=cities, tags=tags,
+    ), status_code=status_code)
+
+
 @router.post("/admin/events/new")
 async def do_admin_event_create(
     request: Request,
@@ -475,15 +517,22 @@ async def do_admin_event_create(
 ):
     _require_admin(user)
 
-    if is_online != "true" and not (location_address and location_address.strip()):
-        organizers = (await db.execute(select(Organizer).order_by(Organizer.name))).scalars().all()
-        cities     = (await db.execute(select(City).order_by(City.name))).scalars().all()
-        tags       = (await db.execute(select(Tag).order_by(Tag.name))).scalars().all()
-        return templates.TemplateResponse("admin/event_form.html", _ctx(
-            request, user, event=None,
-            error="Location address is required for in-person events.",
-            organizers=organizers, cities=cities, tags=tags,
-        ), status_code=400)
+    # ── server-side validation ─────────────────────────────────────
+    try:
+        title       = _require(title, "Title")
+        description = _require(description, "Description")
+        website_url = _require_url(website_url, "Website URL")
+    except ValueError as exc:
+        return await _event_form_error(request, user, db, None, str(exc))
+
+    online = (is_online == "true")
+    if not online:
+        location_address = _strip(location_address)
+        if not location_address:
+            return await _event_form_error(
+                request, user, db, None,
+                "«Location address» is required for in-person events."
+            )
 
     event = Event(
         title=title, organizer_id=organizer_id,
@@ -492,34 +541,26 @@ async def do_admin_event_create(
         price=price, city_id=city_id or None,
         location_address=location_address,
         website_url=website_url, description=description,
-        is_online=(is_online == "true"),
+        is_online=online,
     )
 
     s3_key = None
     if image and image.filename:
         if image.content_type not in ALLOWED_IMG:
-            organizers = (await db.execute(select(Organizer))).scalars().all()
-            cities     = (await db.execute(select(City))).scalars().all()
-            tags       = (await db.execute(select(Tag))).scalars().all()
-            return templates.TemplateResponse("admin/event_form.html", _ctx(
-                request, user, event=None, error="Unsupported image type.",
-                organizers=organizers, cities=cities, tags=tags
-            ), status_code=400)
+            return await _event_form_error(request, user, db, None, "Unsupported image type.")
 
-    contents = await image.read()
-    if contents:
-        ext = ALLOWED_IMG[image.content_type]
-        s3_key = f"uploads/{uuid.uuid4()}.{ext}"
-        try:
-            _s3().upload_fileobj(
-                io.BytesIO(contents),
-                S3_BUCKET,
-                s3_key,
-                ExtraArgs={"ContentType": image.content_type}, 
-            )
-            event.image_url = s3_key
-        except Exception as e:
-            logger.error("S3 upload failed: %s", e)
+        contents = await image.read()
+        if contents:
+            ext = ALLOWED_IMG[image.content_type]
+            s3_key = f"uploads/{uuid.uuid4()}.{ext}"
+            try:
+                _s3().upload_fileobj(
+                    io.BytesIO(contents), S3_BUCKET, s3_key,
+                    ExtraArgs={"ContentType": image.content_type},
+                )
+                event.image_url = s3_key
+            except Exception as e:
+                logger.error("S3 upload failed: %s", e)
 
     db.add(event)
     await db.flush()
@@ -581,24 +622,37 @@ async def do_admin_event_edit(
     user: Optional[User] = Depends(get_current_user_cookie),
 ):
     _require_admin(user)
-    if is_online != "true" and not (location_address and location_address.strip()):
-        result_ev = await db.execute(
-            select(Event)
-            .where(Event.id == event_id)
+
+    # ── re-fetch event for error re-render context ─────────────────
+    async def _fetch_event():
+        res = await db.execute(
+            select(Event).where(Event.id == event_id)
             .options(selectinload(Event.event_tags).selectinload(EventTag.tag))
         )
-        ev = result_ev.scalar_one_or_none()
+        ev = res.scalar_one_or_none()
         if ev:
             ev.tags = [et.tag for et in ev.event_tags]
             ev.image_url = _presign(ev.image_url)
-        organizers = (await db.execute(select(Organizer).order_by(Organizer.name))).scalars().all()
-        cities     = (await db.execute(select(City).order_by(City.name))).scalars().all()
-        tags       = (await db.execute(select(Tag).order_by(Tag.name))).scalars().all()
-        return templates.TemplateResponse("admin/event_form.html", _ctx(
-            request, user, event=ev,
-            error="Location address is required for in-person events.",
-            organizers=organizers, cities=cities, tags=tags,
-        ), status_code=400)
+        return ev
+
+    # ── server-side validation ─────────────────────────────────────
+    try:
+        title       = _require(title, "Title")
+        description = _require(description, "Description")
+        website_url = _require_url(website_url, "Website URL")
+    except ValueError as exc:
+        ev = await _fetch_event()
+        return await _event_form_error(request, user, db, ev, str(exc))
+
+    online = (is_online == "true")
+    if not online:
+        location_address = _strip(location_address)
+        if not location_address:
+            ev = await _fetch_event()
+            return await _event_form_error(
+                request, user, db, ev,
+                "«Location address» is required for in-person events."
+            )
 
     result = await db.execute(
         select(Event)
@@ -616,7 +670,7 @@ async def do_admin_event_edit(
         "price": price, "city_id": city_id or None,
         "location_address": location_address,
         "website_url": website_url, "description": description,
-        "is_online": (is_online == "true"),
+        "is_online": online,
     }
     for field, new_val in updates.items():
         old_val = getattr(event, field, None)
@@ -635,8 +689,7 @@ async def do_admin_event_edit(
                 s3_key = f"uploads/{uuid.uuid4()}.{ext}"
                 try:
                     _s3().upload_fileobj(
-                        io.BytesIO(contents),
-                        S3_BUCKET, s3_key,
+                        io.BytesIO(contents), S3_BUCKET, s3_key,
                         ExtraArgs={"ContentType": image.content_type},
                     )
                     event.image_url = s3_key
@@ -697,6 +750,14 @@ async def do_admin_tag_create(
     user: Optional[User] = Depends(get_current_user_cookie),
 ):
     _require_admin(user)
+
+    name = _strip(name)
+    if not name:
+        tags = (await db.execute(select(Tag).order_by(Tag.name))).scalars().all()
+        return templates.TemplateResponse("admin/tags.html", _ctx(
+            request, user, tags=tags, error="Tag name cannot be blank."
+        ), status_code=400)
+
     existing = (await db.execute(select(Tag).where(Tag.name == name))).scalar_one_or_none()
     if existing:
         tags = (await db.execute(select(Tag).order_by(Tag.name))).scalars().all()
@@ -750,13 +811,35 @@ async def do_admin_organizer_create(
     user: Optional[User] = Depends(get_current_user_cookie),
 ):
     _require_admin(user)
+
+    async def _org_error(msg: str):
+        orgs = (await db.execute(select(Organizer).order_by(Organizer.name))).scalars().all()
+        return templates.TemplateResponse("admin/organizers.html", _ctx(
+            request, user, organizers=orgs, error=msg
+        ), status_code=400)
+
+    try:
+        name        = _require(name, "Name")
+        website     = _require_url(website, "Website")
+        contact_email = _require(contact_email, "Contact email")
+        description = _require(description, "Description")
+    except ValueError as exc:
+        return await _org_error(str(exc))
+
+    # basic email sanity
+    if "@" not in contact_email:
+        return await _org_error("«Contact email» must be a valid email address.")
+
     existing = (await db.execute(select(Organizer).where(Organizer.name == name))).scalar_one_or_none()
     if existing:
-        organizers = (await db.execute(select(Organizer).order_by(Organizer.name))).scalars().all()
-        return templates.TemplateResponse("admin/organizers.html", _ctx(
-            request, user, organizers=organizers, error=f"Organizer '{name}' already exists."
-        ), status_code=400)
-    db.add(Organizer(name=name, website=website or None, contact_email=contact_email or None, description=description or None))
+        return await _org_error(f"Organizer '{name}' already exists.")
+
+    db.add(Organizer(
+        name=name,
+        website=website,
+        contact_email=contact_email,
+        description=description,
+    ))
     await db.commit()
     return RedirectResponse("/admin/organizers", status_code=302)
 
