@@ -10,9 +10,12 @@
       <h1 class="admin-title">Organizers</h1>
     </div>
 
+    <!-- Create organizer form -->
     <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:24px;margin-bottom:28px;max-width:520px;">
       <div style="font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:16px;">New Organizer</div>
-      {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+
+      {% if error %}<div class="alert alert-error" style="margin-bottom:14px;">{{ error }}</div>{% endif %}
+
       <form id="org-form" method="POST" action="/admin/organizers" novalidate>
         <div class="form-row">
           <div class="form-group">
@@ -40,9 +43,20 @@
       </form>
     </div>
 
+    <!-- Organizers table -->
     <div class="table-wrap">
       <table>
-        <thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Website</th><th>Description</th></tr></thead>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Email</th>
+            <th>Website</th>
+            <th>Description</th>
+            <th style="text-align:center;">Events</th>
+            <th>Action</th>
+          </tr>
+        </thead>
         <tbody>
           {% if organizers %}
           {% for org in organizers %}
@@ -52,10 +66,32 @@
             <td style="font-family:var(--font-mono);font-size:12px;color:var(--muted);">{{ org.contact_email or '—' }}</td>
             <td>{% if org.website %}<a href="{{ org.website }}" target="_blank" style="color:var(--accent);font-size:12px;">{{ org.website }}</a>{% else %}—{% endif %}</td>
             <td style="font-size:12px;color:var(--muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ org.description or '—' }}</td>
+            <td style="text-align:center;">
+              {% if org.event_count > 0 %}
+                <span style="font-family:var(--font-mono);font-size:12px;color:var(--accent);">{{ org.event_count }}</span>
+              {% else %}
+                <span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);">0</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if org.event_count == 0 %}
+                <form method="POST" action="/admin/organizers/{{ org.id }}/delete"
+                      onsubmit="return confirm('Delete organizer \'{{ org.name }}\'?')">
+                  <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                </form>
+              {% else %}
+                <span title="Has {{ org.event_count }} event(s) — unlink them first"
+                      style="font-family:var(--font-mono);font-size:10px;color:var(--muted);
+                             border:1px solid var(--border);padding:3px 8px;
+                             border-radius:var(--radius);cursor:default;">In use</span>
+              {% endif %}
+            </td>
           </tr>
           {% endfor %}
           {% else %}
-          <tr><td colspan="5" style="text-align:center;padding:32px;color:var(--muted);">No organizers yet.</td></tr>
+          <tr>
+            <td colspan="7" style="text-align:center;padding:32px;color:var(--muted);">No organizers yet.</td>
+          </tr>
           {% endif %}
         </tbody>
       </table>
@@ -67,6 +103,7 @@
 .field-error { color:var(--danger); font-size:12px; margin-top:4px; min-height:16px; }
 .form-control.is-invalid { border-color:var(--danger); }
 </style>
+
 <script>
 document.getElementById('org-form').addEventListener('submit', function(e) {
   let valid = true;
@@ -76,14 +113,18 @@ document.getElementById('org-form').addEventListener('submit', function(e) {
     if (!test(val)) { if (err) err.textContent = msg; if (el) el.classList.add('is-invalid'); valid = false; }
     else            { if (err) err.textContent = '';  if (el) el.classList.remove('is-invalid'); }
   }
-  check('f-name', 'err-name', v => v.length > 0, 'Name is required.');
-  check('f-desc', 'err-desc', v => v.length > 0, 'Description is required.');
-  check('f-email','err-email',v => v.length > 0 && v.includes('@'), 'Valid email is required.');
+  check('f-name',  'err-name',  v => v.length > 0,             'Name is required.');
+  check('f-desc',  'err-desc',  v => v.length > 0,             'Description is required.');
+  check('f-email', 'err-email', v => v.length > 0 && v.includes('@'), 'Valid email is required.');
   const ws = document.getElementById('f-website'), wsErr = document.getElementById('err-website');
   const wsVal = ws ? ws.value.trim() : '';
-  if (!wsVal) { wsErr.textContent = 'Website URL is required.'; ws.classList.add('is-invalid'); valid = false; }
-  else if (!/^https?:\/\/.+/.test(wsVal)) { wsErr.textContent = 'Must start with https://'; ws.classList.add('is-invalid'); valid = false; }
-  else { wsErr.textContent = ''; ws.classList.remove('is-invalid'); }
+  if (!wsVal) {
+    wsErr.textContent = 'Website URL is required.'; ws.classList.add('is-invalid'); valid = false;
+  } else if (!/^https?:\/\/.+/.test(wsVal)) {
+    wsErr.textContent = 'Must start with https://'; ws.classList.add('is-invalid'); valid = false;
+  } else {
+    wsErr.textContent = ''; ws.classList.remove('is-invalid');
+  }
   if (!valid) { e.preventDefault(); document.querySelector('.is-invalid')?.scrollIntoView({behavior:'smooth',block:'center'}); }
 });
 </script>

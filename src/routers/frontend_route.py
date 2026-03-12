@@ -785,13 +785,19 @@ async def do_admin_city_delete(
 @router.get("/admin/organizers", response_class=HTMLResponse)
 async def page_admin_organizers(
     request: Request,
+    error: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
     user: Optional[User] = Depends(get_current_user_cookie),
 ):
     _require_admin(user)
     organizers = (await db.execute(select(Organizer).order_by(Organizer.name))).scalars().all()
+    # Attach event count to each organizer for display
+    for org in organizers:
+        org.event_count = (await db.execute(
+            select(func.count()).select_from(Event).where(Event.organizer_id == org.id)
+        )).scalar()
     return templates.TemplateResponse("admin/organizers.html", _ctx(
-        request, user, organizers=organizers, active="organizers"
+        request, user, organizers=organizers, active="organizers", error=error
     ))
 
 
@@ -928,3 +934,30 @@ async def do_admin_country_delete(
         await db.delete(country)
         await db.commit()
     return RedirectResponse("/admin/countries", status_code=302)
+
+
+@router.post("/admin/organizers/{organizer_id}/delete")
+async def do_admin_organizer_delete(
+    organizer_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: Optional[User] = Depends(get_current_user_cookie),
+):
+    _require_admin(user)
+
+    organizer = await db.get(Organizer, organizer_id)
+    if not organizer:
+        return RedirectResponse("/admin/organizers", status_code=302)
+
+    # Check for linked events
+    linked = (await db.execute(
+        select(func.count()).select_from(Event).where(Event.organizer_id == organizer_id)
+    )).scalar()
+
+    if linked:
+        from urllib.parse import quote
+        msg = quote(f'Organizer "{organizer.name}" has {linked} event(s) and cannot be deleted.')
+        return RedirectResponse(f"/admin/organizers?error={msg}", status_code=302)
+
+    await db.delete(organizer)
+    await db.commit()
+    return RedirectResponse("/admin/organizers", status_code=302)
