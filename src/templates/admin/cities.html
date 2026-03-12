@@ -2,104 +2,55 @@
 {% block title %}Admin — Cities{% endblock %}
 
 {% block content %}
-
-{% macro sidebar() %}
-<aside class="admin-sidebar">
-  <div class="admin-sidebar__title">Admin Panel</div>
-  <nav class="admin-sidebar__nav">
-    <a href="/admin" class="{% if active == 'dashboard' %}active{% endif %}">
-      <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-        <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
-        <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
-      </svg>Dashboard
-    </a>
-    <a href="/admin/events" class="{% if active == 'events' %}active{% endif %}">
-      <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-        <rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/>
-        <line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
-      </svg>Events
-    </a>
-    <a href="/admin/organizers" class="{% if active == 'organizers' %}active{% endif %}">
-      <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-        <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/>
-        <circle cx="12" cy="7" r="4"/>
-      </svg>Organizers
-    </a>
-    <a href="/admin/tags" class="{% if active == 'tags' %}active{% endif %}">
-      <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-        <path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/>
-        <line x1="7" y1="7" x2="7.01" y2="7"/>
-      </svg>Tags
-    </a>
-    <a href="/admin/cities" class="{% if active == 'cities' %}active{% endif %}">
-      <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-        <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/>
-        <circle cx="12" cy="10" r="3"/>
-      </svg>Cities
-    </a>
-    <a href="/admin/audit" class="{% if active == 'audit' %}active{% endif %}">
-      <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
-        <polyline points="14 2 14 8 20 8"/>
-        <line x1="16" y1="13" x2="8" y2="13"/>
-      </svg>Audit Log
-    </a>
-  </nav>
-</aside>
-{% endmacro %}
-
 <div class="admin-layout">
-  {{ sidebar() }}
+  {% include "admin/_sidebar.html" %}
 
   <div class="admin-content">
     <div class="admin-header">
       <h1 class="admin-title">Cities</h1>
     </div>
 
-    <!-- Create city form -->
     <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:24px;margin-bottom:28px;max-width:480px;">
-      <div style="font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:14px;">
-        New City
-      </div>
+      <div style="font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:14px;">New City</div>
 
       {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
 
       <form id="city-form" method="POST" action="/admin/cities" novalidate
             style="display:flex;flex-direction:column;gap:14px;">
-
-        <div class="form-group" style="margin-bottom:0;">
-          <label class="form-label">City name <span style="color:var(--danger)">*</span></label>
-          <input type="text" name="name" id="f-city-name" class="form-control"
-                 required placeholder="e.g. Berlin">
-          <div class="field-error" id="err-city-name"></div>
+        <div class="form-row">
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label">City name <span style="color:var(--danger)">*</span></label>
+            <input type="text" name="name" id="f-city-name" class="form-control"
+                   required placeholder="e.g. Berlin">
+            <div class="field-error" id="err-city-name"></div>
+          </div>
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label">Country <span style="color:var(--danger)">*</span></label>
+            <select name="country_id" id="f-country" class="form-control filter-select" required>
+              <option value="">— Select country —</option>
+              {% for country in countries %}
+              <option value="{{ country.id }}">{{ country.name }}{% if country.iso_code %} ({{ country.iso_code }}){% endif %}</option>
+              {% endfor %}
+            </select>
+            <div class="field-error" id="err-country"></div>
+          </div>
         </div>
-
-        <div class="form-group" style="margin-bottom:0;">
-          <label class="form-label">Country <span style="color:var(--danger)">*</span></label>
-          <select name="country_id" id="f-country" class="form-control filter-select" required>
-            <option value="">— Select country —</option>
-            {% for country in countries %}
-            <option value="{{ country.id }}">{{ country.name }}{% if country.iso_code %} ({{ country.iso_code }}){% endif %}</option>
-            {% endfor %}
-          </select>
-          <div class="field-error" id="err-country"></div>
-        </div>
-
         <div>
           <button type="submit" class="btn btn-primary">Add City</button>
+          {% if not countries %}
+          <p style="margin-top:10px;font-size:12px;color:var(--muted);">
+            No countries yet — <a href="/admin/countries" style="color:var(--accent);">add a country first →</a>
+          </p>
+          {% endif %}
         </div>
       </form>
     </div>
 
-    <!-- Cities table -->
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>ID</th>
-            <th>City</th>
-            <th>Country</th>
-            <th>Action</th>
+            <th>ID</th><th>City</th><th>Country</th><th>Action</th>
           </tr>
         </thead>
         <tbody>
@@ -118,14 +69,14 @@
             <td style="font-size:13px;color:var(--muted);">
               {{ city.country.name if city.country else '—' }}
               {% if city.country and city.country.iso_code %}
-                <span style="font-family:var(--font-mono);font-size:10px;background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:2px;margin-left:4px;">
-                  {{ city.country.iso_code }}
-                </span>
+              <span style="font-family:var(--font-mono);font-size:10px;background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:2px;margin-left:4px;">
+                {{ city.country.iso_code }}
+              </span>
               {% endif %}
             </td>
             <td>
               <form method="POST" action="/admin/cities/{{ city.id }}/delete"
-                    onsubmit="return confirm('Delete city \'{{ city.name }}\'? Events in this city will have their city cleared.')">
+                    onsubmit="return confirm('Delete city \'{{ city.name }}\'?\nEvents in this city will have their city cleared.')">
                 <button type="submit" class="btn btn-danger btn-sm">Delete</button>
               </form>
             </td>
@@ -133,20 +84,12 @@
           {% endfor %}
           {% else %}
           <tr>
-            <td colspan="4" style="text-align:center;padding:40px;color:var(--muted);">
-              No cities yet. Add your first one above.
-            </td>
+            <td colspan="4" style="text-align:center;padding:40px;color:var(--muted);">No cities yet.</td>
           </tr>
           {% endif %}
         </tbody>
       </table>
     </div>
-
-    {% if not countries %}
-    <div class="alert alert-info" style="margin-top:20px;max-width:480px;">
-      No countries in the database yet. Add countries via the database or API before creating cities.
-    </div>
-    {% endif %}
   </div>
 </div>
 
@@ -158,29 +101,15 @@
 <script>
 document.getElementById('city-form').addEventListener('submit', function(e) {
   let valid = true;
-
   function check(id, errId, test, msg) {
-    const el  = document.getElementById(id);
-    const err = document.getElementById(errId);
+    const el = document.getElementById(id), err = document.getElementById(errId);
     const val = el ? el.value.trim() : '';
-    if (!test(val)) {
-      if (err) err.textContent = msg;
-      if (el)  el.classList.add('is-invalid');
-      valid = false;
-    } else {
-      if (err) err.textContent = '';
-      if (el)  el.classList.remove('is-invalid');
-    }
+    if (!test(val)) { if (err) err.textContent = msg; if (el) el.classList.add('is-invalid'); valid = false; }
+    else            { if (err) err.textContent = '';  if (el) el.classList.remove('is-invalid'); }
   }
-
   check('f-city-name', 'err-city-name', v => v.length > 0, 'City name is required.');
   check('f-country',   'err-country',   v => v !== '',      'Please select a country.');
-
-  if (!valid) {
-    e.preventDefault();
-    const first = document.querySelector('.is-invalid');
-    if (first) first.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }
+  if (!valid) { e.preventDefault(); document.querySelector('.is-invalid')?.scrollIntoView({behavior:'smooth',block:'center'}); }
 });
 </script>
 {% endblock %}

@@ -9,6 +9,7 @@ from src.routers import bookmark_route
 from src.routers import organizer_route
 from src.routers import tag_route
 from src.routers import city_route
+from src.routers import country_route
 from src.routers import audit_route
 from src.routers import frontend_route
 
@@ -37,4 +38,5 @@ app.include_router(bookmark_route.router)
 app.include_router(organizer_route.router)
 app.include_router(tag_route.router)
 app.include_router(city_route.router)
+app.include_router(country_route.router)
 app.include_router(audit_route.router)

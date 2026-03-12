@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}Admin — Countries{% endblock %}
+
+{% block content %}
+<div class="admin-layout">
+  {% include "admin/_sidebar.html" %}
+
+  <div class="admin-content">
+    <div class="admin-header">
+      <h1 class="admin-title">Countries</h1>
+    </div>
+
+    <!-- Create country form -->
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:24px;margin-bottom:28px;max-width:480px;">
+      <div style="font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:14px;">New Country</div>
+
+      {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+
+      <form id="country-form" method="POST" action="/admin/countries" novalidate
+            style="display:flex;flex-direction:column;gap:14px;">
+        <div class="form-row">
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label">Country name <span style="color:var(--danger)">*</span></label>
+            <input type="text" name="name" id="f-country-name" class="form-control"
+                   required placeholder="e.g. Germany">
+            <div class="field-error" id="err-country-name"></div>
+          </div>
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label">ISO code
+              <span style="font-weight:400;color:var(--muted);text-transform:none;letter-spacing:0;">(2–3 chars, optional)</span>
+            </label>
+            <input type="text" name="iso_code" id="f-iso" class="form-control"
+                   maxlength="3" placeholder="e.g. DE"
+                   style="text-transform:uppercase;">
+            <div class="field-error" id="err-iso"></div>
+          </div>
+        </div>
+        <div>
+          <button type="submit" class="btn btn-primary">Add Country</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- Countries table -->
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Country</th>
+            <th>ISO</th>
+            <th>Cities</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% if countries %}
+          {% for country in countries %}
+          <tr>
+            <td style="font-family:var(--font-mono);font-size:12px;color:var(--muted);">#{{ country.id }}</td>
+            <td><strong>{{ country.name }}</strong></td>
+            <td>
+              {% if country.iso_code %}
+              <span style="font-family:var(--font-mono);font-size:11px;background:var(--bg3);border:1px solid var(--border);padding:2px 7px;border-radius:2px;">
+                {{ country.iso_code }}
+              </span>
+              {% else %}
+              <span style="color:var(--muted);font-size:12px;">—</span>
+              {% endif %}
+            </td>
+            <td style="font-family:var(--font-mono);font-size:12px;color:var(--muted);">
+              {{ country.cities | length }}
+            </td>
+            <td>
+              <form method="POST" action="/admin/countries/{{ country.id }}/delete"
+                    onsubmit="return confirm('Delete country \'{{ country.name }}\'?\nAll cities in this country will also be deleted.')">
+                <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+          {% else %}
+          <tr>
+            <td colspan="5" style="text-align:center;padding:40px;color:var(--muted);">
+              No countries yet. Add your first one above.
+            </td>
+          </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<style>
+.field-error { color:var(--danger); font-size:12px; margin-top:4px; min-height:16px; }
+.form-control.is-invalid { border-color:var(--danger); }
+</style>
+
+<script>
+document.getElementById('country-form').addEventListener('submit', function(e) {
+  let valid = true;
+
+  function check(id, errId, test, msg) {
+    const el  = document.getElementById(id);
+    const err = document.getElementById(errId);
+    const val = el ? el.value.trim() : '';
+    if (!test(val)) {
+      if (err) err.textContent = msg;
+      if (el)  el.classList.add('is-invalid');
+      valid = false;
+    } else {
+      if (err) err.textContent = '';
+      if (el)  el.classList.remove('is-invalid');
+    }
+  }
+
+  check('f-country-name', 'err-country-name', v => v.length > 0, 'Country name is required.');
+
+  // ISO: optional but if filled must be 2-3 uppercase letters
+  const isoEl  = document.getElementById('f-iso');
+  const isoErr = document.getElementById('err-iso');
+  const isoVal = isoEl ? isoEl.value.trim() : '';
+  if (isoVal && !/^[A-Za-z]{2,3}$/.test(isoVal)) {
+    isoErr.textContent = 'ISO code must be 2–3 letters.';
+    isoEl.classList.add('is-invalid');
+    valid = false;
+  } else {
+    isoErr.textContent = '';
+    isoEl.classList.remove('is-invalid');
+  }
+
+  if (!valid) {
+    e.preventDefault();
+    const first = document.querySelector('.is-invalid');
+    if (first) first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+});
+
+// Auto-uppercase ISO input
+document.getElementById('f-iso')?.addEventListener('input', function() {
+  const pos = this.selectionStart;
+  this.value = this.value.toUpperCase();
+  this.setSelectionRange(pos, pos);
+});
+</script>
+{% endblock %}

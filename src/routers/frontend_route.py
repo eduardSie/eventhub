@@ -380,6 +380,7 @@ async def page_admin_dashboard(
         "organizers": (await db.execute(select(func.count()).select_from(Organizer))).scalar(),
         "tags":       (await db.execute(select(func.count()).select_from(Tag))).scalar(),
         "cities":     (await db.execute(select(func.count()).select_from(City))).scalar(),
+        "countries":  (await db.execute(select(func.count()).select_from(Country))).scalar(),
         "users":      (await db.execute(select(func.count()).select_from(User))).scalar(),
     }
     return templates.TemplateResponse("admin/dashboard.html", _ctx(
@@ -849,3 +850,81 @@ async def page_admin_audit(
     return templates.TemplateResponse("admin/audit.html", _ctx(
         request, user, logs=logs, active="audit"
     ))
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ADMIN — Countries
+# ═══════════════════════════════════════════════════════════════════
+
+@router.get("/admin/countries", response_class=HTMLResponse)
+async def page_admin_countries(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: Optional[User] = Depends(get_current_user_cookie),
+):
+    _require_admin(user)
+    countries = (await db.execute(
+        select(Country).options(selectinload(Country.cities)).order_by(Country.name)
+    )).scalars().all()
+    return templates.TemplateResponse("admin/countries.html", _ctx(
+        request, user, countries=countries, active="countries"
+    ))
+
+
+@router.post("/admin/countries")
+async def do_admin_country_create(
+    request: Request,
+    name: str = Form(...),
+    iso_code: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db),
+    user: Optional[User] = Depends(get_current_user_cookie),
+):
+    _require_admin(user)
+
+    async def _country_error(msg: str):
+        countries = (await db.execute(
+            select(Country).options(selectinload(Country.cities)).order_by(Country.name)
+        )).scalars().all()
+        return templates.TemplateResponse("admin/countries.html", _ctx(
+            request, user, countries=countries, active="countries", error=msg,
+        ), status_code=400)
+
+    try:
+        name = _require(name, "Country name")
+    except ValueError as exc:
+        return await _country_error(str(exc))
+
+    iso = _strip(iso_code)
+    if iso:
+        iso = iso.upper()
+        if not (2 <= len(iso) <= 3 and iso.isalpha()):
+            return await _country_error("ISO code must be 2–3 letters (e.g. DE, UKR).")
+        existing_iso = (await db.execute(
+            select(Country).where(Country.iso_code == iso)
+        )).scalar_one_or_none()
+        if existing_iso:
+            return await _country_error(f"ISO code '{iso}' is already used by {existing_iso.name}.")
+
+    existing_name = (await db.execute(
+        select(Country).where(Country.name == name)
+    )).scalar_one_or_none()
+    if existing_name:
+        return await _country_error(f"Country '{name}' already exists.")
+
+    db.add(Country(name=name, iso_code=iso or None))
+    await db.commit()
+    return RedirectResponse("/admin/countries", status_code=302)
+
+
+@router.post("/admin/countries/{country_id}/delete")
+async def do_admin_country_delete(
+    country_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: Optional[User] = Depends(get_current_user_cookie),
+):
+    _require_admin(user)
+    country = await db.get(Country, country_id)
+    if country:
+        await db.delete(country)
+        await db.commit()
+    return RedirectResponse("/admin/countries", status_code=302)
