@@ -5,13 +5,6 @@ resource "aws_s3_bucket" "eventhub_images" {
   }
 }
 
-# data "aws_ebs_volume" "istatp_volume" {
-#   filter {
-#     name   = "volume-id"
-#     values = ["vol-062a6bcef4297e6be"]
-#   }
-# }
-
 resource "aws_security_group" "eventhub_sg" {
   name        = "eventhub_web_ssh"
   description = "Allow SSH and HTTP inbound traffic"
@@ -65,8 +58,6 @@ data "aws_ami" "ubuntu" {
 
   owners = ["099720109477"] # Canonical
 }
-
-
 
 resource "aws_instance" "istatp_instance" {
   ami                    = data.aws_ami.ubuntu.id

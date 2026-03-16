@@ -62,16 +62,22 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     steps:
+
+      - uses: actions/checkout@v4
+
       - name: Add SSH key
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.EC2_SSH_KEY }}
 
-      - name: Copy seed.sql
+      - name: Copy files to server
         run: |
+          scp -o StrictHostKeyChecking=no compose.yaml \
+            ubuntu@${{ secrets.EC2_HOST }}:/home/ubuntu/app/compose.yaml
           if [ -f seed.sql ]; then
             scp -o StrictHostKeyChecking=no seed.sql \
               ubuntu@${{ secrets.EC2_HOST }}:/home/ubuntu/app/seed.sql
+          fi
 
       - name: Deploy via SSH
         env:
@@ -95,7 +101,7 @@ jobs:
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io \
               -u ${{ github.actor }} --password-stdin
 
-            cd /home/ubuntu/app
+            cd "$APP_DIR"
 
             docker compose pull app
 
@@ -103,23 +109,20 @@ jobs:
 
             docker compose exec -T app alembic upgrade head
 
-            TABLES=$(docker compose exec -T db \
-              psql -U postgres -d uni_db -tAc \
-              "SELECT COUNT(*) FROM information_schema.tables \
-               WHERE table_schema='public' AND table_type='BASE TABLE';")
- 
-            if [ "$TABLES" -gt 0 ]; then
+            if [ -f "$APP_DIR/seed.sql" ]; then
               EVENTS=$(docker compose exec -T db \
                 psql -U postgres -d uni_db -tAc \
                 "SELECT COUNT(*) FROM events;" 2>/dev/null || echo "0")
  
-              if [ "$EVENTS" -eq 0 ]; then
+              EVENTS=$(echo "$EVENTS" | tr -d '[:space:]')
+ 
+              if [ "$EVENTS" = "0" ]; then
                 echo "DB is empty — running seed..."
                 docker compose exec -T db \
                   psql -U postgres -d uni_db < "$APP_DIR/seed.sql"
                 echo "Seed complete"
               else
-                echo "DB already has data — skipping seed"
+                echo "DB already has $EVENTS events — skipping seed"
               fi
             fi
 
