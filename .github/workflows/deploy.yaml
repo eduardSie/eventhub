@@ -3,6 +3,7 @@ name: Deploy to EC2
 on:
   push:
     branches: [ "main" ]
+  workflow_dispatch:
 
 concurrency:
   group: deploy-backend
@@ -17,7 +18,7 @@ permissions:
   packages: write
 
 jobs:
-  # ── JOB 1: Сборка и пуш Docker-образа ─────────────────────────
+  # ── JOB 1: Build & Push Image ─────────────────────────
   build:
     name: Build & Push Image
     runs-on: ubuntu-latest
@@ -55,7 +56,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ── JOB 2: Деплой на EC2 ──────────────────────────────────────
+  # ── JOB 2: Deploy to EC2 ──────────────────────────────────────
   deploy:
     name: Deploy to EC2
     runs-on: ubuntu-latest
@@ -66,6 +67,12 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.EC2_SSH_KEY }}
 
+      - name: Copy seed.sql
+        run: |
+          if [ -f seed.sql ]; then
+            scp -o StrictHostKeyChecking=no seed.sql \
+              ubuntu@${{ secrets.EC2_HOST }}:/home/ubuntu/app/seed.sql
+
       - name: Deploy via SSH
         env:
           GHCR_USER: ${{ github.actor }}
@@ -73,6 +80,17 @@ jobs:
         run: |
           ssh -o StrictHostKeyChecking=no ubuntu@${{ secrets.EC2_HOST }} << 'ENDSSH'
             set -e
+
+            APP_DIR="/home/ubuntu/app"
+            mkdir -p "$APP_DIR"
+ 
+            cat > "$APP_DIR/.env" << 'ENVEOF'
+          ${{ secrets.APP_ENV }}
+          ENVEOF
+
+            cat > "$APP_DIR/compose.yaml" << 'COMPOSEEOF'
+          ${{ vars.COMPOSE_YAML }}
+          COMPOSEEOF
 
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io \
               -u ${{ github.actor }} --password-stdin
@@ -84,6 +102,26 @@ jobs:
             docker compose up -d --no-deps app
 
             docker compose exec -T app alembic upgrade head
+
+            TABLES=$(docker compose exec -T db \
+              psql -U postgres -d uni_db -tAc \
+              "SELECT COUNT(*) FROM information_schema.tables \
+               WHERE table_schema='public' AND table_type='BASE TABLE';")
+ 
+            if [ "$TABLES" -gt 0 ]; then
+              EVENTS=$(docker compose exec -T db \
+                psql -U postgres -d uni_db -tAc \
+                "SELECT COUNT(*) FROM events;" 2>/dev/null || echo "0")
+ 
+              if [ "$EVENTS" -eq 0 ]; then
+                echo "DB is empty — running seed..."
+                docker compose exec -T db \
+                  psql -U postgres -d uni_db < "$APP_DIR/seed.sql"
+                echo "Seed complete"
+              else
+                echo "DB already has data — skipping seed"
+              fi
+            fi
 
             docker image prune -f
 
