@@ -4,3 +4,7 @@ __pycache__/
 .env
 .idea
 *.pem
+.terraform/
+terraform.tfstate
+terraform.tfstate.backup
+.terraform.lock.hcl
