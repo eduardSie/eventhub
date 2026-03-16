@@ -72,13 +72,14 @@ jobs:
 
       - name: Copy files to server
         run: |
+          ssh -o StrictHostKeyChecking=no ubuntu@${{ secrets.EC2_HOST }} \
+            "mkdir -p /home/ubuntu/app"
           scp -o StrictHostKeyChecking=no compose.yaml \
             ubuntu@${{ secrets.EC2_HOST }}:/home/ubuntu/app/compose.yaml
           if [ -f seed.sql ]; then
             scp -o StrictHostKeyChecking=no seed.sql \
               ubuntu@${{ secrets.EC2_HOST }}:/home/ubuntu/app/seed.sql
           fi
-
       - name: Deploy via SSH
         env:
           GHCR_USER: ${{ github.actor }}
@@ -88,7 +89,6 @@ jobs:
             set -e
 
             APP_DIR="/home/ubuntu/app"
-            mkdir -p "$APP_DIR"
  
             cat > "$APP_DIR/.env" << 'ENVEOF'
           ${{ secrets.APP_ENV }}
