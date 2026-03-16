@@ -19,14 +19,6 @@ SET xmloption = content;
 SET client_min_messages = warning;
 SET row_security = off;
 
---
--- Data for Name: alembic_version; Type: TABLE DATA; Schema: public; Owner: postgres
---
-
-COPY public.alembic_version (version_num) FROM stdin;
-d5ff83fcb988
-\.
-
 
 --
 -- Data for Name: countries; Type: TABLE DATA; Schema: public; Owner: postgres
