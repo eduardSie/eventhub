@@ -8,9 +8,75 @@
   <div class="admin-content">
     <div class="admin-header">
       <h1 class="admin-title">Events</h1>
-      <a href="/admin/events/new" class="btn btn-primary">+ New Event</a>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <!-- Export button -->
+        <a href="/admin/events/export" class="btn btn-ghost btn-sm" title="Download all events as .xlsx">
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          Export .xlsx
+        </a>
+        <a href="/admin/events/new" class="btn btn-primary">+ New Event</a>
+      </div>
     </div>
 
+    <!-- ── Import status banner ── -->
+    {% if request.query_params.get('import_status') %}
+    {% set status = request.query_params.get('import_status') %}
+    {% set msg    = request.query_params.get('msg', '') %}
+    <div class="alert {{ 'alert-success' if status == 'ok' else 'alert-error' }}" style="margin-bottom:20px;">
+      {{ msg }}
+    </div>
+    {% endif %}
+
+    <!-- ── Import form ── -->
+    <details style="margin-bottom:24px;">
+      <summary style="cursor:pointer;font-family:var(--font-mono);font-size:12px;
+                      text-transform:uppercase;letter-spacing:.06em;color:var(--muted);
+                      padding:12px 16px;background:var(--bg2);border:1px solid var(--border);
+                      border-radius:var(--radius);list-style:none;display:flex;align-items:center;gap:8px;">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+        Import events from .xlsx
+      </summary>
+
+      <div style="padding:20px;background:var(--bg2);border:1px solid var(--border);
+                  border-top:none;border-radius:0 0 var(--radius) var(--radius);">
+        <p style="font-size:13px;color:var(--muted);margin-bottom:14px;">
+          Upload an <code style="background:var(--bg3);padding:2px 6px;border-radius:2px;font-family:var(--font-mono);font-size:12px;">.xlsx</code>
+          file using the <strong style="color:var(--text);">Import Template</strong> column layout.
+          Download the export file first — it includes a ready-to-use template on the second sheet.
+        </p>
+        <form method="POST" action="/admin/events/import" enctype="multipart/form-data"
+              style="display:flex;gap:10px;align-items:flex-end;">
+          <div class="form-group" style="margin-bottom:0;flex:1;max-width:340px;">
+            <label class="form-label">Select .xlsx file</label>
+            <input type="file" name="file" class="form-control"
+                   accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                   required style="padding:8px;">
+          </div>
+          <button type="submit" class="btn btn-primary">
+            <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+            </svg>
+            Upload & Import
+          </button>
+        </form>
+        <p style="margin-top:10px;font-size:11px;color:var(--muted);">
+          Required columns: <code style="font-family:var(--font-mono);">title, organizer_name, date_start</code>.
+          Unknown organizers / cities are skipped with an error report.
+        </p>
+      </div>
+    </details>
+
+    <!-- ── Events table ── -->
     <div class="table-wrap">
       <table>
         <thead>

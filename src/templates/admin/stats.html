@@ -1,0 +1,260 @@
+{% extends "base.html" %}
+{% block title %}Admin — Statistics{% endblock %}
+
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="admin-layout">
+  {% include "admin/_sidebar.html" %}
+
+  <div class="admin-content">
+    <div class="admin-header">
+      <h1 class="admin-title">Statistics</h1>
+    </div>
+
+    <!-- Quick summary cards -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:32px;">
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:20px;">
+        <div style="font-family:var(--font-mono);font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:6px;">Total events</div>
+        <div style="font-family:var(--font-head);font-size:32px;font-weight:700;color:var(--accent);">{{ total_events }}</div>
+      </div>
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:20px;">
+        <div style="font-family:var(--font-mono);font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:6px;">Online</div>
+        <div style="font-family:var(--font-head);font-size:32px;font-weight:700;color:var(--success);">{{ online_count }}</div>
+      </div>
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:20px;">
+        <div style="font-family:var(--font-mono);font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:6px;">In-person</div>
+        <div style="font-family:var(--font-head);font-size:32px;font-weight:700;color:var(--text);">{{ inperson_count }}</div>
+      </div>
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:20px;">
+        <div style="font-family:var(--font-mono);font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:6px;">Free events</div>
+        <div style="font-family:var(--font-head);font-size:32px;font-weight:700;color:var(--success);">{{ free_count }}</div>
+      </div>
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:20px;">
+        <div style="font-family:var(--font-mono);font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:6px;">Paid events</div>
+        <div style="font-family:var(--font-head);font-size:32px;font-weight:700;color:var(--accent);">{{ paid_count }}</div>
+      </div>
+    </div>
+
+    <!-- Row 1: Events by Tag + Events by Organizer -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px;">
+
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:24px;">
+        <div style="font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:16px;">Events by Tag (top 10)</div>
+        <div style="position:relative;height:260px;">
+          <canvas id="chartTag"></canvas>
+        </div>
+      </div>
+
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:24px;">
+        <div style="font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:16px;">Events by Organizer</div>
+        <div style="position:relative;height:260px;">
+          <canvas id="chartOrg"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Row 2: Format pie + Price pie + Monthly line -->
+    <div style="display:grid;grid-template-columns:1fr 1fr 2fr;gap:20px;margin-bottom:20px;">
+
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:24px;">
+        <div style="font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:16px;">Format</div>
+        <div style="position:relative;height:200px;">
+          <canvas id="chartFormat"></canvas>
+        </div>
+      </div>
+
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:24px;">
+        <div style="font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:16px;">Pricing</div>
+        <div style="position:relative;height:200px;">
+          <canvas id="chartPrice"></canvas>
+        </div>
+      </div>
+
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:24px;">
+        <div style="font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:16px;">Events added per month</div>
+        <div style="position:relative;height:200px;">
+          <canvas id="chartMonthly"></canvas>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ── Data from server ────────────────────────────────────────────
+const TAG_LABELS   = {{ tag_labels   | safe }};
+const TAG_DATA     = {{ tag_data     | safe }};
+const ORG_LABELS   = {{ org_labels   | safe }};
+const ORG_DATA     = {{ org_data     | safe }};
+const FMT_LABELS   = {{ format_labels | safe }};
+const FMT_DATA     = {{ format_data  | safe }};
+const PRICE_LABELS = {{ price_labels | safe }};
+const PRICE_DATA   = {{ price_data   | safe }};
+const MON_LABELS   = {{ monthly_labels | safe }};
+const MON_DATA     = {{ monthly_data   | safe }};
+
+// ── Theme tokens ─────────────────────────────────────────────────
+const ACCENT  = '#c9a84c';
+const ACCENT2 = '#e8c96b';
+const SUCCESS = '#5ca87a';
+const MUTED   = '#6b6876';
+const TEXT    = '#e8e4dc';
+const BORDER  = '#2a2a32';
+const BG3     = '#1c1c21';
+const DANGER  = '#c45c5c';
+
+const PALETTE = [
+  '#c9a84c','#5ca87a','#6b8fc9','#c45c5c','#9b6bc9',
+  '#c96b8c','#6bc9c2','#c9a46b','#8cc96b','#6b6bc9',
+];
+
+const defaultOpts = {
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: {
+    legend: { labels: { color: TEXT, font: { family: "'DM Mono', monospace", size: 11 } } },
+    tooltip: {
+      backgroundColor: BG3,
+      borderColor: BORDER,
+      borderWidth: 1,
+      titleColor: TEXT,
+      bodyColor: MUTED,
+    },
+  },
+  scales: {
+    x: { ticks: { color: MUTED, font: { family: "'DM Mono', monospace", size: 10 } }, grid: { color: BORDER } },
+    y: { ticks: { color: MUTED, font: { family: "'DM Mono', monospace", size: 10 } }, grid: { color: BORDER } },
+  },
+};
+
+// ── 1. Events by Tag ─────────────────────────────────────────────
+new Chart(document.getElementById('chartTag'), {
+  type: 'bar',
+  data: {
+    labels: TAG_LABELS,
+    datasets: [{
+      label: 'Events',
+      data: TAG_DATA,
+      backgroundColor: TAG_LABELS.map((_, i) => PALETTE[i % PALETTE.length] + 'CC'),
+      borderColor: TAG_LABELS.map((_, i) => PALETTE[i % PALETTE.length]),
+      borderWidth: 1,
+      borderRadius: 3,
+    }],
+  },
+  options: {
+    ...defaultOpts,
+    indexAxis: 'y',
+    plugins: { ...defaultOpts.plugins, legend: { display: false } },
+    scales: {
+      x: { ...defaultOpts.scales.x, beginAtZero: true, ticks: { ...defaultOpts.scales.x.ticks, stepSize: 1 } },
+      y: { ...defaultOpts.scales.y },
+    },
+  },
+});
+
+// ── 2. Events by Organizer ────────────────────────────────────────
+new Chart(document.getElementById('chartOrg'), {
+  type: 'bar',
+  data: {
+    labels: ORG_LABELS,
+    datasets: [{
+      label: 'Events',
+      data: ORG_DATA,
+      backgroundColor: ACCENT + 'BB',
+      borderColor: ACCENT,
+      borderWidth: 1,
+      borderRadius: 3,
+    }],
+  },
+  options: {
+    ...defaultOpts,
+    plugins: { ...defaultOpts.plugins, legend: { display: false } },
+    scales: {
+      x: { ...defaultOpts.scales.x, ticks: { ...defaultOpts.scales.x.ticks, maxRotation: 30 } },
+      y: { ...defaultOpts.scales.y, beginAtZero: true, ticks: { ...defaultOpts.scales.y.ticks, stepSize: 1 } },
+    },
+  },
+});
+
+// ── 3. Format Doughnut ────────────────────────────────────────────
+new Chart(document.getElementById('chartFormat'), {
+  type: 'doughnut',
+  data: {
+    labels: FMT_LABELS,
+    datasets: [{
+      data: FMT_DATA,
+      backgroundColor: [SUCCESS + 'CC', ACCENT + 'CC'],
+      borderColor: [SUCCESS, ACCENT],
+      borderWidth: 2,
+      hoverOffset: 6,
+    }],
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    cutout: '65%',
+    plugins: {
+      legend: { position: 'bottom', labels: { color: TEXT, font: { family: "'DM Mono', monospace", size: 10 }, padding: 12 } },
+      tooltip: defaultOpts.plugins.tooltip,
+    },
+  },
+});
+
+// ── 4. Pricing Doughnut ───────────────────────────────────────────
+new Chart(document.getElementById('chartPrice'), {
+  type: 'doughnut',
+  data: {
+    labels: PRICE_LABELS,
+    datasets: [{
+      data: PRICE_DATA,
+      backgroundColor: [SUCCESS + 'CC', DANGER + 'CC'],
+      borderColor: [SUCCESS, DANGER],
+      borderWidth: 2,
+      hoverOffset: 6,
+    }],
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    cutout: '65%',
+    plugins: {
+      legend: { position: 'bottom', labels: { color: TEXT, font: { family: "'DM Mono', monospace", size: 10 }, padding: 12 } },
+      tooltip: defaultOpts.plugins.tooltip,
+    },
+  },
+});
+
+// ── 5. Monthly Line ──────────────────────────────────────────────
+new Chart(document.getElementById('chartMonthly'), {
+  type: 'line',
+  data: {
+    labels: MON_LABELS,
+    datasets: [{
+      label: 'Events added',
+      data: MON_DATA,
+      borderColor: ACCENT,
+      backgroundColor: ACCENT + '22',
+      pointBackgroundColor: ACCENT,
+      pointBorderColor: BG3,
+      pointRadius: 5,
+      pointHoverRadius: 7,
+      tension: 0.35,
+      fill: true,
+    }],
+  },
+  options: {
+    ...defaultOpts,
+    plugins: { ...defaultOpts.plugins, legend: { display: false } },
+    scales: {
+      x: { ...defaultOpts.scales.x },
+      y: { ...defaultOpts.scales.y, beginAtZero: true, ticks: { ...defaultOpts.scales.y.ticks, stepSize: 1 } },
+    },
+  },
+});
+</script>
+{% endblock %}

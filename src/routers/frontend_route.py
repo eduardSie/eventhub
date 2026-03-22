@@ -5,6 +5,7 @@ Auth is stored in an HttpOnly cookie (JWT token).
 from __future__ import annotations
 
 import io
+import json
 import logging
 import os
 import uuid
@@ -16,10 +17,10 @@ from fastapi import (
     APIRouter, Depends, File, Form, HTTPException,
     Query, Request, Response, UploadFile,
 )
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from jose import JWTError, jwt
-from sqlalchemy import func, select
+from sqlalchemy import extract, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -603,10 +604,8 @@ async def do_admin_event_edit(
         "website_url": website_url, "description": description,
         "is_online": online,
     }
+
     def _fmt(v):
-        """Normalize value for audit log comparison and storage.
-        Strips timezone from datetimes so naive (from form) and
-        aware (from DB) timestamps compare correctly."""
         if isinstance(v, datetime):
             return v.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
         if v is None:
@@ -802,7 +801,6 @@ async def page_admin_organizers(
 ):
     _require_admin(user)
     organizers = (await db.execute(select(Organizer).order_by(Organizer.name))).scalars().all()
-    # Attach event count to each organizer for display
     for org in organizers:
         org.event_count = (await db.execute(
             select(func.count()).select_from(Event).where(Event.organizer_id == org.id)
@@ -850,6 +848,32 @@ async def do_admin_organizer_create(
     return RedirectResponse("/admin/organizers", status_code=302)
 
 
+@router.post("/admin/organizers/{organizer_id}/delete")
+async def do_admin_organizer_delete(
+    organizer_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: Optional[User] = Depends(get_current_user_cookie),
+):
+    _require_admin(user)
+
+    organizer = await db.get(Organizer, organizer_id)
+    if not organizer:
+        return RedirectResponse("/admin/organizers", status_code=302)
+
+    linked = (await db.execute(
+        select(func.count()).select_from(Event).where(Event.organizer_id == organizer_id)
+    )).scalar()
+
+    if linked:
+        from urllib.parse import quote
+        msg = quote(f'Organizer "{organizer.name}" has {linked} event(s) and cannot be deleted.')
+        return RedirectResponse(f"/admin/organizers?error={msg}", status_code=302)
+
+    await db.delete(organizer)
+    await db.commit()
+    return RedirectResponse("/admin/organizers", status_code=302)
+
+
 # ═══════════════════════════════════════════════════════════════════
 # ADMIN — Audit Log
 # ═══════════════════════════════════════════════════════════════════
@@ -865,7 +889,6 @@ async def page_admin_audit(
         select(EventAuditLog).order_by(EventAuditLog.change_date.desc()).limit(200)
     )).scalars().all()
 
-    # Resolve user IDs → emails for display
     user_ids = {log.changed_by for log in logs if log.changed_by is not None}
     users_by_id: dict[int, str] = {}
     if user_ids:
@@ -957,28 +980,381 @@ async def do_admin_country_delete(
     return RedirectResponse("/admin/countries", status_code=302)
 
 
-@router.post("/admin/organizers/{organizer_id}/delete")
-async def do_admin_organizer_delete(
-    organizer_id: int,
+# ═══════════════════════════════════════════════════════════════════
+# ADMIN — Statistics  (1.5 — Data Visualization)
+# ═══════════════════════════════════════════════════════════════════
+
+@router.get("/admin/stats", response_class=HTMLResponse)
+async def page_admin_stats(
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: Optional[User] = Depends(get_current_user_cookie),
 ):
     _require_admin(user)
 
-    organizer = await db.get(Organizer, organizer_id)
-    if not organizer:
-        return RedirectResponse("/admin/organizers", status_code=302)
+    tag_rows = (await db.execute(
+        select(Tag.name, func.count(EventTag.event_id).label("cnt"))
+        .join(EventTag, Tag.id == EventTag.tag_id)
+        .group_by(Tag.name)
+        .order_by(func.count(EventTag.event_id).desc())
+        .limit(10)
+    )).all()
 
-    # Check for linked events
-    linked = (await db.execute(
-        select(func.count()).select_from(Event).where(Event.organizer_id == organizer_id)
-    )).scalar()
+    org_rows = (await db.execute(
+        select(Organizer.name, func.count(Event.id).label("cnt"))
+        .join(Event, Organizer.id == Event.organizer_id)
+        .group_by(Organizer.name)
+        .order_by(func.count(Event.id).desc())
+        .limit(10)
+    )).all()
 
-    if linked:
-        from urllib.parse import quote
-        msg = quote(f'Organizer "{organizer.name}" has {linked} event(s) and cannot be deleted.')
-        return RedirectResponse(f"/admin/organizers?error={msg}", status_code=302)
+    online_count   = (await db.execute(select(func.count()).select_from(Event).where(Event.is_online == True))).scalar()  or 0
+    inperson_count = (await db.execute(select(func.count()).select_from(Event).where(Event.is_online == False))).scalar() or 0
+    free_count     = (await db.execute(select(func.count()).select_from(Event).where(Event.price == 0))).scalar() or 0
+    paid_count     = (await db.execute(select(func.count()).select_from(Event).where(Event.price >  0))).scalar() or 0
 
-    await db.delete(organizer)
+    month_rows = (await db.execute(
+        select(
+            extract("year",  Event.created_at).label("yr"),
+            extract("month", Event.created_at).label("mo"),
+            func.count(Event.id).label("cnt"),
+        )
+        .group_by("yr", "mo")
+        .order_by("yr", "mo")
+    )).all()
+
+    monthly_labels = [f"{int(r.yr)}-{int(r.mo):02d}" for r in month_rows]
+    monthly_data   = [r.cnt for r in month_rows]
+
+    return templates.TemplateResponse("admin/stats.html", _ctx(
+        request, user,
+        active="stats",
+        total_events=online_count + inperson_count,
+        online_count=online_count,
+        inperson_count=inperson_count,
+        free_count=free_count,
+        paid_count=paid_count,
+        tag_labels=json.dumps([r.name for r in tag_rows]),
+        tag_data=json.dumps([r.cnt for r in tag_rows]),
+        org_labels=json.dumps([r.name for r in org_rows]),
+        org_data=json.dumps([r.cnt for r in org_rows]),
+        format_labels=json.dumps(["Online", "In-person"]),
+        format_data=json.dumps([online_count, inperson_count]),
+        price_labels=json.dumps(["Free", "Paid"]),
+        price_data=json.dumps([free_count, paid_count]),
+        monthly_labels=json.dumps(monthly_labels),
+        monthly_data=json.dumps(monthly_data),
+    ))
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ADMIN — Excel Export  (1.6 — File Operations, Export)
+# ═══════════════════════════════════════════════════════════════════
+
+@router.get("/admin/events/export")
+async def export_events_xlsx(
+    db: AsyncSession = Depends(get_db),
+    user: Optional[User] = Depends(get_current_user_cookie),
+):
+    """Download all events as a formatted .xlsx file."""
+    _require_admin(user)
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+
+    events = (await db.execute(
+        select(Event)
+        .options(
+            selectinload(Event.event_tags).selectinload(EventTag.tag),
+            selectinload(Event.city),
+            selectinload(Event.organizer),
+        )
+        .order_by(Event.id)
+    )).scalars().all()
+
+    wb = Workbook()
+
+    ws = wb.active
+    ws.title = "Events"
+
+    HDR_FONT  = Font(name="Arial", bold=True, color="FFFFFF", size=11)
+    HDR_FILL  = PatternFill(fill_type="solid", start_color="1A1A2E")
+    HDR_ALIGN = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    ALT_FILL  = PatternFill(fill_type="solid", start_color="F0F0F5")
+    DATA_FONT = Font(name="Arial", size=10)
+
+    columns = [
+        ("ID",              6),
+        ("Title",           30),
+        ("Organizer",       22),
+        ("Date Start",      18),
+        ("Date End",        18),
+        ("Price (USD)",     12),
+        ("Format",          12),
+        ("Location / City", 28),
+        ("Website URL",     40),
+        ("Description",     50),
+        ("Tags",            28),
+        ("Created At",      18),
+    ]
+
+    for col, (header, width) in enumerate(columns, 1):
+        cell = ws.cell(row=1, column=col, value=header)
+        cell.font      = HDR_FONT
+        cell.fill      = HDR_FILL
+        cell.alignment = HDR_ALIGN
+        ws.column_dimensions[get_column_letter(col)].width = width
+
+    ws.row_dimensions[1].height = 28
+    ws.freeze_panes = "A2"
+
+    for row_idx, ev in enumerate(events, 2):
+        tags_str = ", ".join(et.tag.name for et in ev.event_tags)
+        location = ev.location_address or ""
+        if not location and ev.city:
+            location = ev.city.name
+        if not location and ev.is_online:
+            location = "Online"
+
+        row_vals = [
+            ev.id,
+            ev.title,
+            ev.organizer.name if ev.organizer else "",
+            ev.date_start.strftime("%Y-%m-%d %H:%M")  if ev.date_start else "",
+            ev.date_end.strftime("%Y-%m-%d %H:%M")    if ev.date_end   else "",
+            float(ev.price) if ev.price else 0.0,
+            "Online" if ev.is_online else "In-person",
+            location,
+            ev.website_url or "",
+            ev.description or "",
+            tags_str,
+            ev.created_at.strftime("%Y-%m-%d %H:%M")  if ev.created_at else "",
+        ]
+
+        use_alt = (row_idx % 2 == 0)
+        for col, val in enumerate(row_vals, 1):
+            cell = ws.cell(row=row_idx, column=col, value=val)
+            cell.font      = DATA_FONT
+            cell.alignment = Alignment(vertical="top", wrap_text=(col == 10))
+            if use_alt:
+                cell.fill = ALT_FILL
+
+    ws2 = wb.create_sheet("Import Template")
+
+    TMPL_FONT = Font(name="Arial", bold=True, color="FFFFFF", size=10)
+    TMPL_FILL = PatternFill(fill_type="solid", start_color="C9A84C")
+
+    import_cols = [
+        ("title",            30),
+        ("organizer_name",   22),
+        ("date_start",       22),
+        ("date_end",         22),
+        ("price",            12),
+        ("is_online",        14),
+        ("location_address", 30),
+        ("website_url",      40),
+        ("description",      50),
+        ("tags",             30),
+        ("city_name",        20),
+    ]
+
+    for col, (header, width) in enumerate(import_cols, 1):
+        cell = ws2.cell(row=1, column=col, value=header)
+        cell.font      = TMPL_FONT
+        cell.fill      = TMPL_FILL
+        cell.alignment = Alignment(horizontal="center")
+        ws2.column_dimensions[get_column_letter(col)].width = width
+
+    notes_font = Font(name="Arial", italic=True, color="6B6876", size=9)
+    notes = [
+        "Required. Max 100 chars",
+        "Required. Must match existing organizer name exactly",
+        "Required. Format: YYYY-MM-DD HH:MM",
+        "Optional. Format: YYYY-MM-DD HH:MM",
+        "Optional. Default: 0.00",
+        "Optional. TRUE or FALSE (default FALSE)",
+        "Required for in-person events",
+        "Optional. Must start with https://",
+        "Optional. Event description",
+        "Optional. Comma-separated tag names",
+        "Optional. Must match existing city name",
+    ]
+    for col, note in enumerate(notes, 1):
+        cell = ws2.cell(row=2, column=col, value=note)
+        cell.font = notes_font
+
+    sample = [
+        "Sample Conference 2026", "IT Arena",
+        "2026-09-10 09:00", "2026-09-12 18:00",
+        "199.00", "FALSE", "123 Main St, Lviv",
+        "https://example.com", "A great tech conference",
+        "Backend, DevOps, Cloud", "Lviv",
+    ]
+    sample_font = Font(name="Arial", size=10, color="1A1A2E")
+    sample_fill = PatternFill(fill_type="solid", start_color="FFFBE6")
+    for col, val in enumerate(sample, 1):
+        cell = ws2.cell(row=3, column=col, value=val)
+        cell.font = sample_font
+        cell.fill = sample_fill
+
+    ws2.freeze_panes = "A3"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="events_export.xlsx"'},
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ADMIN — Excel Import  (1.6 — File Operations, Import)
+# ═══════════════════════════════════════════════════════════════════
+
+@router.post("/admin/events/import")
+async def import_events_xlsx(
+    request: Request,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    user: Optional[User] = Depends(get_current_user_cookie),
+):
+    """Upload an .xlsx file (matching the Import Template) and create events."""
+    _require_admin(user)
+
+    from urllib.parse import quote
+    from openpyxl import load_workbook
+
+    if not (file.filename or "").lower().endswith(".xlsx"):
+        msg = quote("Import failed: only .xlsx files are supported.")
+        return RedirectResponse(f"/admin/events?import_status=error&msg={msg}", status_code=302)
+
+    contents = await file.read()
+
+    try:
+        wb = load_workbook(filename=io.BytesIO(contents), data_only=True)
+    except Exception:
+        msg = quote("Import failed: could not open the file. Make sure it is a valid .xlsx.")
+        return RedirectResponse(f"/admin/events?import_status=error&msg={msg}", status_code=302)
+
+    ws = wb["Import Template"] if "Import Template" in wb.sheetnames else wb.worksheets[0]
+
+    def clean_hdr(raw) -> str:
+        h = str(raw or "").strip().lower()
+        h = h.split("*")[0].strip()
+        h = h.split("(")[0].strip()
+        return h
+
+    raw_headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+    headers = [clean_hdr(h) for h in raw_headers]
+
+    def cell_str(row, col_name: str) -> str:
+        if col_name not in headers:
+            return ""
+        idx = headers.index(col_name) + 1
+        return str(ws.cell(row=row, column=idx).value or "").strip()
+
+    created_count = 0
+    error_rows: list[str] = []
+
+    for row_num in range(2, ws.max_row + 1):
+        title = cell_str(row_num, "title")
+        if not title:
+            continue  # skip blank / notes rows
+
+        org_name = cell_str(row_num, "organizer_name")
+        if not org_name:
+            error_rows.append(f"Row {row_num} ({title!r}): organizer_name is required")
+            continue
+
+        org = (await db.execute(
+            select(Organizer).where(Organizer.name == org_name)
+        )).scalar_one_or_none()
+        if not org:
+            error_rows.append(f"Row {row_num} ({title!r}): organizer '{org_name}' not found")
+            continue
+
+        ds_raw = ws.cell(row=row_num, column=headers.index("date_start") + 1).value \
+            if "date_start" in headers else None
+        try:
+            if isinstance(ds_raw, datetime):
+                date_start = ds_raw
+            elif ds_raw:
+                date_start = datetime.strptime(str(ds_raw).strip(), "%Y-%m-%d %H:%M")
+            else:
+                raise ValueError("empty")
+        except (ValueError, TypeError):
+            error_rows.append(f"Row {row_num} ({title!r}): invalid date_start '{ds_raw}'")
+            continue
+
+        de_raw = ws.cell(row=row_num, column=headers.index("date_end") + 1).value \
+            if "date_end" in headers else None
+        date_end = None
+        if de_raw:
+            try:
+                date_end = de_raw if isinstance(de_raw, datetime) \
+                    else datetime.strptime(str(de_raw).strip(), "%Y-%m-%d %H:%M")
+            except (ValueError, TypeError):
+                pass
+
+        try:
+            price = Decimal(str(cell_str(row_num, "price") or "0"))
+        except Exception:
+            price = Decimal("0.00")
+
+        is_online_str = cell_str(row_num, "is_online").upper()
+        is_online = is_online_str in ("TRUE", "1", "YES")
+
+        location_address = cell_str(row_num, "location_address") or None
+        website_url      = cell_str(row_num, "website_url")      or None
+        description      = cell_str(row_num, "description")      or None
+
+        city_id = None
+        city_name = cell_str(row_num, "city_name")
+        if city_name:
+            city_obj = (await db.execute(
+                select(City).where(City.name == city_name)
+            )).scalar_one_or_none()
+            if city_obj:
+                city_id = city_obj.id
+
+        ev = Event(
+            title=title,
+            organizer_id=org.id,
+            date_start=date_start,
+            date_end=date_end,
+            price=price,
+            is_online=is_online,
+            location_address=location_address,
+            website_url=website_url,
+            description=description,
+            city_id=city_id,
+        )
+        db.add(ev)
+        await db.flush()
+
+        tags_str = cell_str(row_num, "tags")
+        if tags_str:
+            for tag_name in [t.strip() for t in tags_str.split(",") if t.strip()]:
+                tag_obj = (await db.execute(
+                    select(Tag).where(Tag.name == tag_name)
+                )).scalar_one_or_none()
+                if tag_obj:
+                    db.add(EventTag(event_id=ev.id, tag_id=tag_obj.id))
+
+        created_count += 1
+
     await db.commit()
-    return RedirectResponse("/admin/organizers", status_code=302)
+
+    parts = [f"Successfully imported {created_count} event(s)."]
+    if error_rows:
+        parts.append(f"Skipped {len(error_rows)} row(s): " + " | ".join(error_rows[:5]))
+        if len(error_rows) > 5:
+            parts.append(f"... and {len(error_rows) - 5} more.")
+
+    status = "ok" if not error_rows or created_count > 0 else "error"
+    msg = quote(" ".join(parts))
+    return RedirectResponse(f"/admin/events?import_status={status}&msg={msg}", status_code=302)
