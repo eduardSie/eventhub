@@ -120,9 +120,17 @@ def _resolve_tags_and_images(events):
     return events
 
 
-def _ctx(request: Request, user: Optional[User], **kwargs) -> dict:
-    messages = getattr(request.state, "messages", [])
-    return {"request": request, "user": user, "messages": messages, **kwargs}
+# ── _ctx: does NOT include 'request' (passed separately per new Starlette API)
+def _ctx(user: Optional[User], **kwargs) -> dict:
+    return {"user": user, **kwargs}
+
+
+def _r(request: Request, template: str, user: Optional[User],
+        status_code: int = 200, **kwargs):
+    """TemplateResponse wrapper compatible with Starlette 0.36+."""
+    return templates.TemplateResponse(
+        request, template, _ctx(user, **kwargs), status_code=status_code
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -166,13 +174,11 @@ async def page_index(
     total_events     = (await db.execute(select(func.count()).select_from(Event))).scalar()
     total_organizers = (await db.execute(select(func.count()).select_from(Organizer))).scalar()
 
-    return templates.TemplateResponse("index.html", _ctx(
-        request, user,
-        events=events, organizers=organizers, tags=tags,
-        search=search, is_online=is_online,
-        organizer_id=_organizer_id, tag_id=_tag_id,
-        total_events=total_events, total_organizers=total_organizers,
-    ))
+    return _r(request, "index.html", user,
+              events=events, organizers=organizers, tags=tags,
+              search=search, is_online=is_online,
+              organizer_id=_organizer_id, tag_id=_tag_id,
+              total_events=total_events, total_organizers=total_organizers)
 
 
 @router.get("/event/{event_id}", response_class=HTMLResponse)
@@ -203,10 +209,8 @@ async def page_event_detail(
         )).scalar_one_or_none()
         is_bookmarked = bm is not None
 
-    return templates.TemplateResponse("event_detail.html", _ctx(
-        request, user,
-        event=event, organizer=organizer, is_bookmarked=is_bookmarked,
-    ))
+    return _r(request, "event_detail.html", user,
+               event=event, organizer=organizer, is_bookmarked=is_bookmarked)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -217,7 +221,7 @@ async def page_event_detail(
 async def page_login(request: Request, user: Optional[User] = Depends(get_current_user_cookie)):
     if user:
         return RedirectResponse("/", status_code=302)
-    return templates.TemplateResponse("login.html", _ctx(request, user))
+    return _r(request, "login.html", user)
 
 
 @router.post("/login")
@@ -229,15 +233,12 @@ async def do_login(
 ):
     email = email.strip()
     if not email:
-        return templates.TemplateResponse("login.html", _ctx(
-            request, None, error="Email is required."
-        ), status_code=400)
+        return _r(request, "login.html", None, status_code=400, error="Email is required.")
 
     user = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
     if not user or not verify_password(password, user.password_hash):
-        return templates.TemplateResponse("login.html", _ctx(
-            request, None, error="Invalid email or password.", email=email
-        ), status_code=400)
+        return _r(request, "login.html", None, status_code=400,
+                  error="Invalid email or password.", email=email)
 
     token    = create_access_token({"sub": str(user.id), "role": user.role})
     response = RedirectResponse("/", status_code=302)
@@ -249,7 +250,7 @@ async def do_login(
 async def page_register(request: Request, user: Optional[User] = Depends(get_current_user_cookie)):
     if user:
         return RedirectResponse("/", status_code=302)
-    return templates.TemplateResponse("register.html", _ctx(request, user))
+    return _r(request, "register.html", user)
 
 
 @router.post("/register")
@@ -261,19 +262,15 @@ async def do_register(
 ):
     email = email.strip()
     if not email:
-        return templates.TemplateResponse("register.html", _ctx(
-            request, None, error="Email is required."
-        ), status_code=400)
+        return _r(request, "register.html", None, status_code=400, error="Email is required.")
     if not password or len(password) < 8:
-        return templates.TemplateResponse("register.html", _ctx(
-            request, None, error="Password must be at least 8 characters.", email=email
-        ), status_code=400)
+        return _r(request, "register.html", None, status_code=400,
+                  error="Password must be at least 8 characters.", email=email)
 
     existing = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
     if existing:
-        return templates.TemplateResponse("register.html", _ctx(
-            request, None, error="Email already registered.", email=email
-        ), status_code=400)
+        return _r(request, "register.html", None, status_code=400,
+                  error="Email already registered.", email=email)
 
     new_user = User(email=email, password_hash=hash_password(password), role="user")
     db.add(new_user)
@@ -319,7 +316,7 @@ async def page_bookmarks(
     for bm in bookmarks:
         _resolve_tags_and_images(bm.event)
 
-    return templates.TemplateResponse("bookmarks.html", _ctx(request, user, bookmarks=bookmarks))
+    return _r(request, "bookmarks.html", user, bookmarks=bookmarks)
 
 
 @router.post("/bookmarks/{event_id}")
@@ -384,9 +381,7 @@ async def page_admin_dashboard(
         "countries":  (await db.execute(select(func.count()).select_from(Country))).scalar(),
         "users":      (await db.execute(select(func.count()).select_from(User))).scalar(),
     }
-    return templates.TemplateResponse("admin/dashboard.html", _ctx(
-        request, user, stats=stats, active="dashboard"
-    ))
+    return _r(request, "admin/dashboard.html", user, stats=stats, active="dashboard")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -408,9 +403,7 @@ async def page_admin_events(
     for ev in events:
         ev.tags = [et.tag for et in ev.event_tags]
 
-    return templates.TemplateResponse("admin/events.html", _ctx(
-        request, user, events=events, active="events"
-    ))
+    return _r(request, "admin/events.html", user, events=events, active="events")
 
 
 @router.get("/admin/events/new", response_class=HTMLResponse)
@@ -423,20 +416,16 @@ async def page_admin_event_new(
     organizers = (await db.execute(select(Organizer).order_by(Organizer.name))).scalars().all()
     cities     = (await db.execute(select(City).order_by(City.name))).scalars().all()
     tags       = (await db.execute(select(Tag).order_by(Tag.name))).scalars().all()
-    return templates.TemplateResponse("admin/event_form.html", _ctx(
-        request, user, event=None,
-        organizers=organizers, cities=cities, tags=tags,
-    ))
+    return _r(request, "admin/event_form.html", user,
+               event=None, organizers=organizers, cities=cities, tags=tags)
 
 
 async def _event_form_error(request, user, db, event, error, status_code=400):
     organizers = (await db.execute(select(Organizer).order_by(Organizer.name))).scalars().all()
     cities     = (await db.execute(select(City).order_by(City.name))).scalars().all()
     tags       = (await db.execute(select(Tag).order_by(Tag.name))).scalars().all()
-    return templates.TemplateResponse("admin/event_form.html", _ctx(
-        request, user, event=event, error=error,
-        organizers=organizers, cities=cities, tags=tags,
-    ), status_code=status_code)
+    return _r(request, "admin/event_form.html", user, status_code=status_code,
+               event=event, error=error, organizers=organizers, cities=cities, tags=tags)
 
 
 @router.post("/admin/events/new")
@@ -529,10 +518,8 @@ async def page_admin_event_edit(
     organizers = (await db.execute(select(Organizer).order_by(Organizer.name))).scalars().all()
     cities     = (await db.execute(select(City).order_by(City.name))).scalars().all()
     tags       = (await db.execute(select(Tag).order_by(Tag.name))).scalars().all()
-    return templates.TemplateResponse("admin/event_form.html", _ctx(
-        request, user, event=event,
-        organizers=organizers, cities=cities, tags=tags,
-    ))
+    return _r(request, "admin/event_form.html", user,
+               event=event, organizers=organizers, cities=cities, tags=tags)
 
 
 @router.post("/admin/events/{event_id}/edit")
@@ -669,9 +656,7 @@ async def page_admin_tags(
 ):
     _require_admin(user)
     tags = (await db.execute(select(Tag).order_by(Tag.name))).scalars().all()
-    return templates.TemplateResponse("admin/tags.html", _ctx(
-        request, user, tags=tags, active="tags"
-    ))
+    return _r(request, "admin/tags.html", user, tags=tags, active="tags")
 
 
 @router.post("/admin/tags")
@@ -685,16 +670,14 @@ async def do_admin_tag_create(
     name = _strip(name)
     if not name:
         tags = (await db.execute(select(Tag).order_by(Tag.name))).scalars().all()
-        return templates.TemplateResponse("admin/tags.html", _ctx(
-            request, user, tags=tags, error="Tag name cannot be blank."
-        ), status_code=400)
+        return _r(request, "admin/tags.html", user, status_code=400,
+                   tags=tags, error="Tag name cannot be blank.")
 
     existing = (await db.execute(select(Tag).where(Tag.name == name))).scalar_one_or_none()
     if existing:
         tags = (await db.execute(select(Tag).order_by(Tag.name))).scalars().all()
-        return templates.TemplateResponse("admin/tags.html", _ctx(
-            request, user, tags=tags, error=f"Tag '{name}' already exists."
-        ), status_code=400)
+        return _r(request, "admin/tags.html", user, status_code=400,
+                   tags=tags, error=f"Tag '{name}' already exists.")
 
     db.add(Tag(name=name))
     await db.commit()
@@ -730,9 +713,8 @@ async def page_admin_cities(
         select(City).options(selectinload(City.country)).order_by(City.name)
     )).scalars().all()
     countries = (await db.execute(select(Country).order_by(Country.name))).scalars().all()
-    return templates.TemplateResponse("admin/cities.html", _ctx(
-        request, user, cities=cities, countries=countries, active="cities"
-    ))
+    return _r(request, "admin/cities.html", user,
+               cities=cities, countries=countries, active="cities")
 
 
 @router.post("/admin/cities")
@@ -750,10 +732,8 @@ async def do_admin_city_create(
             select(City).options(selectinload(City.country)).order_by(City.name)
         )).scalars().all()
         countries = (await db.execute(select(Country).order_by(Country.name))).scalars().all()
-        return templates.TemplateResponse("admin/cities.html", _ctx(
-            request, user, cities=cities, countries=countries,
-            active="cities", error=msg,
-        ), status_code=400)
+        return _r(request, "admin/cities.html", user, status_code=400,
+                   cities=cities, countries=countries, active="cities", error=msg)
 
     name = _strip(name)
     if not name:
@@ -805,9 +785,8 @@ async def page_admin_organizers(
         org.event_count = (await db.execute(
             select(func.count()).select_from(Event).where(Event.organizer_id == org.id)
         )).scalar()
-    return templates.TemplateResponse("admin/organizers.html", _ctx(
-        request, user, organizers=organizers, active="organizers", error=error
-    ))
+    return _r(request, "admin/organizers.html", user,
+               organizers=organizers, active="organizers", error=error)
 
 
 @router.post("/admin/organizers")
@@ -824,9 +803,8 @@ async def do_admin_organizer_create(
 
     async def _org_error(msg: str):
         orgs = (await db.execute(select(Organizer).order_by(Organizer.name))).scalars().all()
-        return templates.TemplateResponse("admin/organizers.html", _ctx(
-            request, user, organizers=orgs, error=msg
-        ), status_code=400)
+        return _r(request, "admin/organizers.html", user, status_code=400,
+                   organizers=orgs, error=msg)
 
     try:
         name          = _require(name, "Name")
@@ -897,9 +875,8 @@ async def page_admin_audit(
         )).all()
         users_by_id = {row.id: row.email for row in rows}
 
-    return templates.TemplateResponse("admin/audit.html", _ctx(
-        request, user, logs=logs, users_by_id=users_by_id, active="audit"
-    ))
+    return _r(request, "admin/audit.html", user,
+               logs=logs, users_by_id=users_by_id, active="audit")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -916,9 +893,7 @@ async def page_admin_countries(
     countries = (await db.execute(
         select(Country).options(selectinload(Country.cities)).order_by(Country.name)
     )).scalars().all()
-    return templates.TemplateResponse("admin/countries.html", _ctx(
-        request, user, countries=countries, active="countries"
-    ))
+    return _r(request, "admin/countries.html", user, countries=countries, active="countries")
 
 
 @router.post("/admin/countries")
@@ -935,9 +910,8 @@ async def do_admin_country_create(
         countries = (await db.execute(
             select(Country).options(selectinload(Country.cities)).order_by(Country.name)
         )).scalars().all()
-        return templates.TemplateResponse("admin/countries.html", _ctx(
-            request, user, countries=countries, active="countries", error=msg,
-        ), status_code=400)
+        return _r(request, "admin/countries.html", user, status_code=400,
+                   countries=countries, active="countries", error=msg)
 
     try:
         name = _require(name, "Country name")
@@ -1023,28 +997,23 @@ async def page_admin_stats(
         .order_by("yr", "mo")
     )).all()
 
-    monthly_labels = [f"{int(r.yr)}-{int(r.mo):02d}" for r in month_rows]
-    monthly_data   = [r.cnt for r in month_rows]
-
-    return templates.TemplateResponse("admin/stats.html", _ctx(
-        request, user,
-        active="stats",
-        total_events=online_count + inperson_count,
-        online_count=online_count,
-        inperson_count=inperson_count,
-        free_count=free_count,
-        paid_count=paid_count,
-        tag_labels=json.dumps([r.name for r in tag_rows]),
-        tag_data=json.dumps([r.cnt for r in tag_rows]),
-        org_labels=json.dumps([r.name for r in org_rows]),
-        org_data=json.dumps([r.cnt for r in org_rows]),
-        format_labels=json.dumps(["Online", "In-person"]),
-        format_data=json.dumps([online_count, inperson_count]),
-        price_labels=json.dumps(["Free", "Paid"]),
-        price_data=json.dumps([free_count, paid_count]),
-        monthly_labels=json.dumps(monthly_labels),
-        monthly_data=json.dumps(monthly_data),
-    ))
+    return _r(request, "admin/stats.html", user,
+               active="stats",
+               total_events=online_count + inperson_count,
+               online_count=online_count,
+               inperson_count=inperson_count,
+               free_count=free_count,
+               paid_count=paid_count,
+               tag_labels=json.dumps([r.name for r in tag_rows]),
+               tag_data=json.dumps([r.cnt for r in tag_rows]),
+               org_labels=json.dumps([r.name for r in org_rows]),
+               org_data=json.dumps([r.cnt for r in org_rows]),
+               format_labels=json.dumps(["Online", "In-person"]),
+               format_data=json.dumps([online_count, inperson_count]),
+               price_labels=json.dumps(["Free", "Paid"]),
+               price_data=json.dumps([free_count, paid_count]),
+               monthly_labels=json.dumps([f"{int(r.yr)}-{int(r.mo):02d}" for r in month_rows]),
+               monthly_data=json.dumps([r.cnt for r in month_rows]))
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1056,7 +1025,6 @@ async def export_events_xlsx(
     db: AsyncSession = Depends(get_db),
     user: Optional[User] = Depends(get_current_user_cookie),
 ):
-    """Download all events as a formatted .xlsx file."""
     _require_admin(user)
 
     from openpyxl import Workbook
@@ -1074,7 +1042,6 @@ async def export_events_xlsx(
     )).scalars().all()
 
     wb = Workbook()
-
     ws = wb.active
     ws.title = "Events"
 
@@ -1085,27 +1052,15 @@ async def export_events_xlsx(
     DATA_FONT = Font(name="Arial", size=10)
 
     columns = [
-        ("ID",              6),
-        ("Title",           30),
-        ("Organizer",       22),
-        ("Date Start",      18),
-        ("Date End",        18),
-        ("Price (USD)",     12),
-        ("Format",          12),
-        ("Location / City", 28),
-        ("Website URL",     40),
-        ("Description",     50),
-        ("Tags",            28),
-        ("Created At",      18),
+        ("ID", 6), ("Title", 30), ("Organizer", 22), ("Date Start", 18),
+        ("Date End", 18), ("Price (USD)", 12), ("Format", 12),
+        ("Location / City", 28), ("Website URL", 40), ("Description", 50),
+        ("Tags", 28), ("Created At", 18),
     ]
-
     for col, (header, width) in enumerate(columns, 1):
         cell = ws.cell(row=1, column=col, value=header)
-        cell.font      = HDR_FONT
-        cell.fill      = HDR_FILL
-        cell.alignment = HDR_ALIGN
+        cell.font = HDR_FONT; cell.fill = HDR_FILL; cell.alignment = HDR_ALIGN
         ws.column_dimensions[get_column_letter(col)].width = width
-
     ws.row_dimensions[1].height = 28
     ws.freeze_panes = "A2"
 
@@ -1116,94 +1071,62 @@ async def export_events_xlsx(
             location = ev.city.name
         if not location and ev.is_online:
             location = "Online"
-
         row_vals = [
-            ev.id,
-            ev.title,
+            ev.id, ev.title,
             ev.organizer.name if ev.organizer else "",
-            ev.date_start.strftime("%Y-%m-%d %H:%M")  if ev.date_start else "",
-            ev.date_end.strftime("%Y-%m-%d %H:%M")    if ev.date_end   else "",
+            ev.date_start.strftime("%Y-%m-%d %H:%M") if ev.date_start else "",
+            ev.date_end.strftime("%Y-%m-%d %H:%M")   if ev.date_end   else "",
             float(ev.price) if ev.price else 0.0,
             "Online" if ev.is_online else "In-person",
-            location,
-            ev.website_url or "",
-            ev.description or "",
+            location, ev.website_url or "", ev.description or "",
             tags_str,
-            ev.created_at.strftime("%Y-%m-%d %H:%M")  if ev.created_at else "",
+            ev.created_at.strftime("%Y-%m-%d %H:%M") if ev.created_at else "",
         ]
-
         use_alt = (row_idx % 2 == 0)
         for col, val in enumerate(row_vals, 1):
             cell = ws.cell(row=row_idx, column=col, value=val)
-            cell.font      = DATA_FONT
+            cell.font = DATA_FONT
             cell.alignment = Alignment(vertical="top", wrap_text=(col == 10))
             if use_alt:
                 cell.fill = ALT_FILL
 
     ws2 = wb.create_sheet("Import Template")
-
     TMPL_FONT = Font(name="Arial", bold=True, color="FFFFFF", size=10)
     TMPL_FILL = PatternFill(fill_type="solid", start_color="C9A84C")
-
     import_cols = [
-        ("title",            30),
-        ("organizer_name",   22),
-        ("date_start",       22),
-        ("date_end",         22),
-        ("price",            12),
-        ("is_online",        14),
-        ("location_address", 30),
-        ("website_url",      40),
-        ("description",      50),
-        ("tags",             30),
-        ("city_name",        20),
+        ("title", 30), ("organizer_name", 22), ("date_start", 22), ("date_end", 22),
+        ("price", 12), ("is_online", 14), ("location_address", 30),
+        ("website_url", 40), ("description", 50), ("tags", 30), ("city_name", 20),
     ]
-
     for col, (header, width) in enumerate(import_cols, 1):
         cell = ws2.cell(row=1, column=col, value=header)
-        cell.font      = TMPL_FONT
-        cell.fill      = TMPL_FILL
+        cell.font = TMPL_FONT; cell.fill = TMPL_FILL
         cell.alignment = Alignment(horizontal="center")
         ws2.column_dimensions[get_column_letter(col)].width = width
-
-    notes_font = Font(name="Arial", italic=True, color="6B6876", size=9)
     notes = [
-        "Required. Max 100 chars",
-        "Required. Must match existing organizer name exactly",
-        "Required. Format: YYYY-MM-DD HH:MM",
-        "Optional. Format: YYYY-MM-DD HH:MM",
-        "Optional. Default: 0.00",
-        "Optional. TRUE or FALSE (default FALSE)",
-        "Required for in-person events",
-        "Optional. Must start with https://",
-        "Optional. Event description",
-        "Optional. Comma-separated tag names",
-        "Optional. Must match existing city name",
+        "Required. Max 100 chars", "Required. Must match existing organizer name exactly",
+        "Required. Format: YYYY-MM-DD HH:MM", "Optional. Format: YYYY-MM-DD HH:MM",
+        "Optional. Default: 0.00", "Optional. TRUE or FALSE (default FALSE)",
+        "Required for in-person events", "Optional. Must start with https://",
+        "Optional.", "Optional. Comma-separated tag names", "Optional. Must match existing city name",
     ]
+    notes_font = Font(name="Arial", italic=True, color="6B6876", size=9)
     for col, note in enumerate(notes, 1):
-        cell = ws2.cell(row=2, column=col, value=note)
-        cell.font = notes_font
-
+        cell = ws2.cell(row=2, column=col, value=note); cell.font = notes_font
     sample = [
-        "Sample Conference 2026", "IT Arena",
-        "2026-09-10 09:00", "2026-09-12 18:00",
-        "199.00", "FALSE", "123 Main St, Lviv",
-        "https://example.com", "A great tech conference",
-        "Backend, DevOps, Cloud", "Lviv",
+        "Sample Conference 2026", "IT Arena", "2026-09-10 09:00", "2026-09-12 18:00",
+        "199.00", "FALSE", "123 Main St, Lviv", "https://example.com",
+        "A great tech conference", "Backend, DevOps, Cloud", "Lviv",
     ]
-    sample_font = Font(name="Arial", size=10, color="1A1A2E")
-    sample_fill = PatternFill(fill_type="solid", start_color="FFFBE6")
+    sf = Font(name="Arial", size=10, color="1A1A2E")
+    sfill = PatternFill(fill_type="solid", start_color="FFFBE6")
     for col, val in enumerate(sample, 1):
-        cell = ws2.cell(row=3, column=col, value=val)
-        cell.font = sample_font
-        cell.fill = sample_fill
-
+        cell = ws2.cell(row=3, column=col, value=val); cell.font = sf; cell.fill = sfill
     ws2.freeze_panes = "A3"
 
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
-
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1222,7 +1145,6 @@ async def import_events_xlsx(
     db: AsyncSession = Depends(get_db),
     user: Optional[User] = Depends(get_current_user_cookie),
 ):
-    """Upload an .xlsx file (matching the Import Template) and create events."""
     _require_admin(user)
 
     from urllib.parse import quote
@@ -1233,29 +1155,24 @@ async def import_events_xlsx(
         return RedirectResponse(f"/admin/events?import_status=error&msg={msg}", status_code=302)
 
     contents = await file.read()
-
     try:
         wb = load_workbook(filename=io.BytesIO(contents), data_only=True)
     except Exception:
-        msg = quote("Import failed: could not open the file. Make sure it is a valid .xlsx.")
+        msg = quote("Import failed: could not open the file.")
         return RedirectResponse(f"/admin/events?import_status=error&msg={msg}", status_code=302)
 
     ws = wb["Import Template"] if "Import Template" in wb.sheetnames else wb.worksheets[0]
 
     def clean_hdr(raw) -> str:
         h = str(raw or "").strip().lower()
-        h = h.split("*")[0].strip()
-        h = h.split("(")[0].strip()
-        return h
+        return h.split("*")[0].split("(")[0].strip()
 
-    raw_headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
-    headers = [clean_hdr(h) for h in raw_headers]
+    headers = [clean_hdr(ws.cell(row=1, column=c).value) for c in range(1, ws.max_column + 1)]
 
     def cell_str(row, col_name: str) -> str:
         if col_name not in headers:
             return ""
-        idx = headers.index(col_name) + 1
-        return str(ws.cell(row=row, column=idx).value or "").strip()
+        return str(ws.cell(row=row, column=headers.index(col_name) + 1).value or "").strip()
 
     created_count = 0
     error_rows: list[str] = []
@@ -1263,32 +1180,23 @@ async def import_events_xlsx(
     for row_num in range(2, ws.max_row + 1):
         title = cell_str(row_num, "title")
         if not title:
-            continue  # skip blank / notes rows
+            continue
 
         org_name = cell_str(row_num, "organizer_name")
         if not org_name:
-            error_rows.append(f"Row {row_num} ({title!r}): organizer_name is required")
-            continue
+            error_rows.append(f"Row {row_num} ({title!r}): organizer_name is required"); continue
 
-        org = (await db.execute(
-            select(Organizer).where(Organizer.name == org_name)
-        )).scalar_one_or_none()
+        org = (await db.execute(select(Organizer).where(Organizer.name == org_name))).scalar_one_or_none()
         if not org:
-            error_rows.append(f"Row {row_num} ({title!r}): organizer '{org_name}' not found")
-            continue
+            error_rows.append(f"Row {row_num} ({title!r}): organizer '{org_name}' not found"); continue
 
         ds_raw = ws.cell(row=row_num, column=headers.index("date_start") + 1).value \
             if "date_start" in headers else None
         try:
-            if isinstance(ds_raw, datetime):
-                date_start = ds_raw
-            elif ds_raw:
-                date_start = datetime.strptime(str(ds_raw).strip(), "%Y-%m-%d %H:%M")
-            else:
-                raise ValueError("empty")
+            date_start = ds_raw if isinstance(ds_raw, datetime) \
+                else datetime.strptime(str(ds_raw).strip(), "%Y-%m-%d %H:%M")
         except (ValueError, TypeError):
-            error_rows.append(f"Row {row_num} ({title!r}): invalid date_start '{ds_raw}'")
-            continue
+            error_rows.append(f"Row {row_num} ({title!r}): invalid date_start '{ds_raw}'"); continue
 
         de_raw = ws.cell(row=row_num, column=headers.index("date_end") + 1).value \
             if "date_end" in headers else None
@@ -1305,12 +1213,7 @@ async def import_events_xlsx(
         except Exception:
             price = Decimal("0.00")
 
-        is_online_str = cell_str(row_num, "is_online").upper()
-        is_online = is_online_str in ("TRUE", "1", "YES")
-
-        location_address = cell_str(row_num, "location_address") or None
-        website_url      = cell_str(row_num, "website_url")      or None
-        description      = cell_str(row_num, "description")      or None
+        is_online = cell_str(row_num, "is_online").upper() in ("TRUE", "1", "YES")
 
         city_id = None
         city_name = cell_str(row_num, "city_name")
@@ -1322,15 +1225,12 @@ async def import_events_xlsx(
                 city_id = city_obj.id
 
         ev = Event(
-            title=title,
-            organizer_id=org.id,
-            date_start=date_start,
-            date_end=date_end,
-            price=price,
-            is_online=is_online,
-            location_address=location_address,
-            website_url=website_url,
-            description=description,
+            title=title, organizer_id=org.id,
+            date_start=date_start, date_end=date_end,
+            price=price, is_online=is_online,
+            location_address=cell_str(row_num, "location_address") or None,
+            website_url=cell_str(row_num, "website_url") or None,
+            description=cell_str(row_num, "description") or None,
             city_id=city_id,
         )
         db.add(ev)
@@ -1351,10 +1251,12 @@ async def import_events_xlsx(
 
     parts = [f"Successfully imported {created_count} event(s)."]
     if error_rows:
-        parts.append(f"Skipped {len(error_rows)} row(s): " + " | ".join(error_rows[:5]))
+        parts.append("Skipped: " + " | ".join(error_rows[:5]))
         if len(error_rows) > 5:
             parts.append(f"... and {len(error_rows) - 5} more.")
 
-    status = "ok" if not error_rows or created_count > 0 else "error"
-    msg = quote(" ".join(parts))
-    return RedirectResponse(f"/admin/events?import_status={status}&msg={msg}", status_code=302)
+    status = "ok" if created_count > 0 else "error"
+    return RedirectResponse(
+        f"/admin/events?import_status={status}&msg={quote(' '.join(parts))}",
+        status_code=302,
+    )
