@@ -651,13 +651,17 @@ async def do_admin_event_delete(
 @router.get("/admin/tags", response_class=HTMLResponse)
 async def page_admin_tags(
     request: Request,
+    error: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
     user: Optional[User] = Depends(get_current_user_cookie),
 ):
     _require_admin(user)
     tags = (await db.execute(select(Tag).order_by(Tag.name))).scalars().all()
+    for tag in tags:
+        tag.event_count = (await db.execute(
+            select(func.count()).select_from(EventTag).where(EventTag.tag_id == tag.id)
+        )).scalar() or 0
     return _r(request, "admin/tags.html", user, tags=tags, active="tags")
-
 
 @router.post("/admin/tags")
 async def do_admin_tag_create(
@@ -692,11 +696,21 @@ async def do_admin_tag_delete(
 ):
     _require_admin(user)
     tag = await db.get(Tag, tag_id)
-    if tag:
-        await db.delete(tag)
-        await db.commit()
-    return RedirectResponse("/admin/tags", status_code=302)
+    if not tag:
+        return RedirectResponse("/admin/tags", status_code=302)
 
+    linked = (await db.execute(
+        select(func.count()).select_from(EventTag).where(EventTag.tag_id == tag_id)
+    )).scalar() or 0
+
+    if linked:
+        from urllib.parse import quote
+        msg = quote(f'Tag "{tag.name}" is used by {linked} event(s) and cannot be deleted.')
+        return RedirectResponse(f"/admin/tags?error={msg}", status_code=302)
+
+    await db.delete(tag)
+    await db.commit()
+    return RedirectResponse("/admin/tags", status_code=302)
 
 # ═══════════════════════════════════════════════════════════════════
 # ADMIN — Cities
@@ -979,16 +993,24 @@ async def do_admin_country_delete(
     if not country:
         return RedirectResponse("/admin/countries", status_code=302)
 
-    # Count events linked to any city in this country
-    linked = (await db.execute(
+    from urllib.parse import quote
+
+    linked_cities = (await db.execute(
+        select(func.count()).select_from(City).where(City.country_id == country_id)
+    )).scalar() or 0
+
+    linked_events = (await db.execute(
         select(func.count()).select_from(Event)
         .join(City, Event.city_id == City.id)
         .where(City.country_id == country_id)
-    )).scalar()
+    )).scalar() or 0
 
-    if linked:
-        from urllib.parse import quote
-        msg = quote(f'Country "{country.name}" has {linked} event(s) linked via its cities and cannot be deleted.')
+    if linked_events:
+        msg = quote(f'Country "{country.name}" has {linked_events} event(s) via its cities — reassign them first.')
+        return RedirectResponse(f"/admin/countries?error={msg}", status_code=302)
+
+    if linked_cities:
+        msg = quote(f'Country "{country.name}" has {linked_cities} city/cities — remove them first.')
         return RedirectResponse(f"/admin/countries?error={msg}", status_code=302)
 
     await db.delete(country)

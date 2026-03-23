@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database import get_db
 from src.core.auth import require_admin
-from src.models.tag import Tag
+from src.models.tag import Tag, EventTag
 from src.models.user import User
 from src.schemas.tag_schema import TagCreate, TagOut
 
@@ -41,6 +41,16 @@ async def delete_tag(
     tag = await db.get(Tag, tag_id)
     if not tag:
         raise HTTPException(status_code=404, detail="Tag not found")
+
+    linked = (await db.execute(
+        select(func.count()).select_from(EventTag).where(EventTag.tag_id == tag_id)
+    )).scalar() or 0
+    if linked:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Tag is used by {linked} event(s). Remove it from all events first."
+        )
+
     await db.delete(tag)
     await db.commit()
     return None

@@ -21,23 +21,37 @@
 
     <div class="table-wrap">
       <table>
-        <thead><tr><th>ID</th><th>Name</th><th>Action</th></tr></thead>
+        <thead><tr><th>ID</th><th>Name</th><th style="text-align:center;">Events</th><th>Action</th></tr></thead>
         <tbody>
           {% if tags %}
           {% for tag in tags %}
           <tr>
             <td style="font-family:var(--font-mono);font-size:12px;color:var(--muted);">#{{ tag.id }}</td>
             <td><span class="tag">{{ tag.name }}</span></td>
+            <td style="text-align:center;">
+              {% if tag.event_count > 0 %}
+                <span style="font-family:var(--font-mono);font-size:12px;color:var(--accent);">{{ tag.event_count }}</span>
+              {% else %}
+                <span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);">0</span>
+              {% endif %}
+            </td>
             <td>
-              <form method="POST" action="/admin/tags/{{ tag.id }}/delete"
-                    onsubmit="return confirm('Delete tag \'{{ tag.name }}\'?')">
-                <button type="submit" class="btn btn-danger btn-sm">Delete</button>
-              </form>
+              {% if tag.event_count == 0 %}
+                <form method="POST" action="/admin/tags/{{ tag.id }}/delete"
+                      onsubmit="return confirm('Delete tag \'{{ tag.name }}\'?')">
+                  <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                </form>
+              {% else %}
+                <span title="Used by {{ tag.event_count }} event(s) — remove from all events first"
+                      style="font-family:var(--font-mono);font-size:10px;color:var(--muted);
+                            border:1px solid var(--border);padding:3px 8px;
+                            border-radius:var(--radius);cursor:default;">In use</span>
+              {% endif %}
             </td>
           </tr>
           {% endfor %}
           {% else %}
-          <tr><td colspan="3" style="text-align:center;padding:32px;color:var(--muted);">No tags yet.</td></tr>
+          <tr><td colspan="4" style="text-align:center;padding:32px;color:var(--muted);">No tags yet.</td></tr>
           {% endif %}
         </tbody>
       </table>
