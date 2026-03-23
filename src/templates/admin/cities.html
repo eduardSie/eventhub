@@ -50,7 +50,7 @@
       <table>
         <thead>
           <tr>
-            <th>ID</th><th>City</th><th>Country</th><th>Action</th>
+            <th>ID</th><th>City</th><th>Country</th><th style="text-align:center;">Events</th><th>Action</th>
           </tr>
         </thead>
         <tbody>
@@ -74,17 +74,31 @@
               </span>
               {% endif %}
             </td>
+            <td style="text-align:center;">
+              {% if city.event_count > 0 %}
+                <span style="font-family:var(--font-mono);font-size:12px;color:var(--accent);">{{ city.event_count }}</span>
+              {% else %}
+                <span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);">0</span>
+              {% endif %}
+            </td>
             <td>
-              <form method="POST" action="/admin/cities/{{ city.id }}/delete"
-                    onsubmit="return confirm('Delete city \'{{ city.name }}\'?\nEvents in this city will have their city cleared.')">
-                <button type="submit" class="btn btn-danger btn-sm">Delete</button>
-              </form>
+              {% if city.event_count == 0 %}
+                <form method="POST" action="/admin/cities/{{ city.id }}/delete"
+                      onsubmit="return confirm('Delete city \'{{ city.name }}\'?')">
+                  <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                </form>
+              {% else %}
+                <span title="Used by {{ city.event_count }} event(s) — reassign them first"
+                      style="font-family:var(--font-mono);font-size:10px;color:var(--muted);
+                             border:1px solid var(--border);padding:3px 8px;
+                             border-radius:var(--radius);cursor:default;">In use</span>
+              {% endif %}
             </td>
           </tr>
           {% endfor %}
           {% else %}
           <tr>
-            <td colspan="4" style="text-align:center;padding:40px;color:var(--muted);">No cities yet.</td>
+            <td colspan="5" style="text-align:center;padding:40px;color:var(--muted);">No cities yet.</td>
           </tr>
           {% endif %}
         </tbody>

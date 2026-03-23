@@ -10,7 +10,6 @@
       <h1 class="admin-title">Countries</h1>
     </div>
 
-    <!-- Create country form -->
     <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:24px;margin-bottom:28px;max-width:480px;">
       <div style="font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:14px;">New Country</div>
 
@@ -41,7 +40,6 @@
       </form>
     </div>
 
-    <!-- Countries table -->
     <div class="table-wrap">
       <table>
         <thead>
@@ -50,6 +48,7 @@
             <th>Country</th>
             <th>ISO</th>
             <th>Cities</th>
+            <th style="text-align:center;">Events</th>
             <th>Action</th>
           </tr>
         </thead>
@@ -71,17 +70,31 @@
             <td style="font-family:var(--font-mono);font-size:12px;color:var(--muted);">
               {{ country.cities | length }}
             </td>
+            <td style="text-align:center;">
+              {% if country.event_count > 0 %}
+                <span style="font-family:var(--font-mono);font-size:12px;color:var(--accent);">{{ country.event_count }}</span>
+              {% else %}
+                <span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);">0</span>
+              {% endif %}
+            </td>
             <td>
-              <form method="POST" action="/admin/countries/{{ country.id }}/delete"
-                    onsubmit="return confirm('Delete country \'{{ country.name }}\'?\nAll cities in this country will also be deleted.')">
-                <button type="submit" class="btn btn-danger btn-sm">Delete</button>
-              </form>
+              {% if country.event_count == 0 %}
+                <form method="POST" action="/admin/countries/{{ country.id }}/delete"
+                      onsubmit="return confirm('Delete country \'{{ country.name }}\'?\nAll cities in this country will also be deleted.')">
+                  <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                </form>
+              {% else %}
+                <span title="Has {{ country.event_count }} event(s) via its cities — reassign them first"
+                      style="font-family:var(--font-mono);font-size:10px;color:var(--muted);
+                             border:1px solid var(--border);padding:3px 8px;
+                             border-radius:var(--radius);cursor:default;">In use</span>
+              {% endif %}
             </td>
           </tr>
           {% endfor %}
           {% else %}
           <tr>
-            <td colspan="5" style="text-align:center;padding:40px;color:var(--muted);">
+            <td colspan="6" style="text-align:center;padding:40px;color:var(--muted);">
               No countries yet. Add your first one above.
             </td>
           </tr>
@@ -100,24 +113,14 @@
 <script>
 document.getElementById('country-form').addEventListener('submit', function(e) {
   let valid = true;
-
   function check(id, errId, test, msg) {
     const el  = document.getElementById(id);
     const err = document.getElementById(errId);
     const val = el ? el.value.trim() : '';
-    if (!test(val)) {
-      if (err) err.textContent = msg;
-      if (el)  el.classList.add('is-invalid');
-      valid = false;
-    } else {
-      if (err) err.textContent = '';
-      if (el)  el.classList.remove('is-invalid');
-    }
+    if (!test(val)) { if (err) err.textContent = msg; if (el) el.classList.add('is-invalid'); valid = false; }
+    else            { if (err) err.textContent = '';  if (el) el.classList.remove('is-invalid'); }
   }
-
   check('f-country-name', 'err-country-name', v => v.length > 0, 'Country name is required.');
-
-  // ISO: optional but if filled must be 2-3 uppercase letters
   const isoEl  = document.getElementById('f-iso');
   const isoErr = document.getElementById('err-iso');
   const isoVal = isoEl ? isoEl.value.trim() : '';
@@ -129,7 +132,6 @@ document.getElementById('country-form').addEventListener('submit', function(e) {
     isoErr.textContent = '';
     isoEl.classList.remove('is-invalid');
   }
-
   if (!valid) {
     e.preventDefault();
     const first = document.querySelector('.is-invalid');
@@ -137,7 +139,6 @@ document.getElementById('country-form').addEventListener('submit', function(e) {
   }
 });
 
-// Auto-uppercase ISO input
 document.getElementById('f-iso')?.addEventListener('input', function() {
   const pos = this.selectionStart;
   this.value = this.value.toUpperCase();

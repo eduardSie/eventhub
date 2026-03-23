@@ -705,6 +705,7 @@ async def do_admin_tag_delete(
 @router.get("/admin/cities", response_class=HTMLResponse)
 async def page_admin_cities(
     request: Request,
+    error: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
     user: Optional[User] = Depends(get_current_user_cookie),
 ):
@@ -713,8 +714,12 @@ async def page_admin_cities(
         select(City).options(selectinload(City.country)).order_by(City.name)
     )).scalars().all()
     countries = (await db.execute(select(Country).order_by(Country.name))).scalars().all()
+    for city in cities:
+        city.event_count = (await db.execute(
+            select(func.count()).select_from(Event).where(Event.city_id == city.id)
+        )).scalar()
     return _r(request, "admin/cities.html", user,
-               cities=cities, countries=countries, active="cities")
+               cities=cities, countries=countries, active="cities", error=error)
 
 
 @router.post("/admin/cities")
@@ -762,9 +767,25 @@ async def do_admin_city_delete(
 ):
     _require_admin(user)
     city = await db.get(City, city_id)
-    if city:
-        await db.delete(city)
-        await db.commit()
+    if not city:
+        return RedirectResponse("/admin/cities", status_code=302)
+
+    linked = (await db.execute(
+        select(func.count()).select_from(Event).where(Event.city_id == city_id)
+    )).scalar()
+
+    if linked:
+        cities    = (await db.execute(
+            select(City).options(selectinload(City.country)).order_by(City.name)
+        )).scalars().all()
+        countries = (await db.execute(select(Country).order_by(Country.name))).scalars().all()
+        # need a fake request — use redirect with error query param instead
+        from urllib.parse import quote
+        msg = quote(f'City "{city.name}" is used by {linked} event(s) and cannot be deleted.')
+        return RedirectResponse(f"/admin/cities?error={msg}", status_code=302)
+
+    await db.delete(city)
+    await db.commit()
     return RedirectResponse("/admin/cities", status_code=302)
 
 
@@ -886,6 +907,7 @@ async def page_admin_audit(
 @router.get("/admin/countries", response_class=HTMLResponse)
 async def page_admin_countries(
     request: Request,
+    error: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
     user: Optional[User] = Depends(get_current_user_cookie),
 ):
@@ -893,7 +915,13 @@ async def page_admin_countries(
     countries = (await db.execute(
         select(Country).options(selectinload(Country.cities)).order_by(Country.name)
     )).scalars().all()
-    return _r(request, "admin/countries.html", user, countries=countries, active="countries")
+    for country in countries:
+        country.event_count = (await db.execute(
+            select(func.count()).select_from(Event)
+            .join(City, Event.city_id == City.id)
+            .where(City.country_id == country.id)
+        )).scalar()
+    return _r(request, "admin/countries.html", user, countries=countries, active="countries", error=error)
 
 
 @router.post("/admin/countries")
@@ -948,9 +976,23 @@ async def do_admin_country_delete(
 ):
     _require_admin(user)
     country = await db.get(Country, country_id)
-    if country:
-        await db.delete(country)
-        await db.commit()
+    if not country:
+        return RedirectResponse("/admin/countries", status_code=302)
+
+    # Count events linked to any city in this country
+    linked = (await db.execute(
+        select(func.count()).select_from(Event)
+        .join(City, Event.city_id == City.id)
+        .where(City.country_id == country_id)
+    )).scalar()
+
+    if linked:
+        from urllib.parse import quote
+        msg = quote(f'Country "{country.name}" has {linked} event(s) linked via its cities and cannot be deleted.')
+        return RedirectResponse(f"/admin/countries?error={msg}", status_code=302)
+
+    await db.delete(country)
+    await db.commit()
     return RedirectResponse("/admin/countries", status_code=302)
 
 
