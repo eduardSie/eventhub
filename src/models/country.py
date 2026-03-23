@@ -2,6 +2,7 @@ from typing import Optional, List
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy import String
 from src.models.base import Base
+from src.models.city import City
 
 
 class Country(Base):

@@ -747,13 +747,17 @@ async def do_admin_city_create(
     _require_admin(user)
 
     async def _city_error(msg: str):
-        cities    = (await db.execute(
+        cities = (await db.execute(
             select(City).options(selectinload(City.country)).order_by(City.name)
         )).scalars().all()
         countries = (await db.execute(select(Country).order_by(Country.name))).scalars().all()
+        for city in cities:                                     
+            city.event_count = (await db.execute(          
+                select(func.count()).select_from(Event)   
+                .where(Event.city_id == city.id)       
+            )).scalar() or 0                     
         return _r(request, "admin/cities.html", user, status_code=400,
-                   cities=cities, countries=countries, active="cities", error=msg)
-
+                cities=cities, countries=countries, active="cities", error=msg)
     name = _strip(name)
     if not name:
         return await _city_error("City name cannot be blank.")
@@ -952,8 +956,14 @@ async def do_admin_country_create(
         countries = (await db.execute(
             select(Country).options(selectinload(Country.cities)).order_by(Country.name)
         )).scalars().all()
+        for country in countries:
+            country.event_count = (await db.execute(
+                select(func.count()).select_from(Event)
+                .join(City, Event.city_id == City.id)
+                .where(City.country_id == country.id)
+            )).scalar() or 0
         return _r(request, "admin/countries.html", user, status_code=400,
-                   countries=countries, active="countries", error=msg)
+                countries=countries, active="countries", error=msg)
 
     try:
         name = _require(name, "Country name")
