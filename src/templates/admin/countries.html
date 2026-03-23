@@ -78,16 +78,23 @@
               {% endif %}
             </td>
             <td>
-              {% if country.event_count == 0 %}
+              {% set has_cities = country.cities | length > 0 %}
+              {% set has_events = country.event_count > 0 %}
+              {% if not has_cities and not has_events %}
                 <form method="POST" action="/admin/countries/{{ country.id }}/delete"
-                      onsubmit="return confirm('Delete country \'{{ country.name }}\'?\nAll cities in this country will also be deleted.')">
+                      onsubmit="return confirm('Delete country \'{{ country.name }}\'?')">
                   <button type="submit" class="btn btn-danger btn-sm">Delete</button>
                 </form>
-              {% else %}
+              {% elif has_events %}
                 <span title="Has {{ country.event_count }} event(s) via its cities — reassign them first"
                       style="font-family:var(--font-mono);font-size:10px;color:var(--muted);
-                             border:1px solid var(--border);padding:3px 8px;
-                             border-radius:var(--radius);cursor:default;">In use</span>
+                            border:1px solid var(--border);padding:3px 8px;
+                            border-radius:var(--radius);cursor:default;">In use</span>
+              {% else %}
+                <span title="Has {{ country.cities | length }} city/cities — remove them first"
+                      style="font-family:var(--font-mono);font-size:10px;color:var(--muted);
+                            border:1px solid var(--border);padding:3px 8px;
+                            border-radius:var(--radius);cursor:default;">Has cities</span>
               {% endif %}
             </td>
           </tr>
