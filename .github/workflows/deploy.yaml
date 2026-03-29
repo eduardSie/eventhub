@@ -118,8 +118,7 @@ jobs:
  
               if [ "$EVENTS" = "0" ]; then
                 echo "DB is empty — running seed..."
-                docker compose exec -T db \
-                  psql -U postgres -d uni_db < "$APP_DIR/seed.sql"
+                cat "seed.sql" | docker compose exec -T db psql -U postgres -d uni_db
                 echo "Seed complete"
               else
                 echo "DB already has $EVENTS events — skipping seed"
